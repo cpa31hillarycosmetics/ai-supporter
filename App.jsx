@@ -37,7 +37,7 @@ export default function App() {
   const [productsLoading, setProductsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [hillaryProducts, setHillaryProducts] = useState([]);
-  const apiKey = ""; // Ключ Gemini (надається автоматично середовищем)
+  const apiKey = "AIzaSyC6zqfwIA1yEpA50rq4-ownpB0bwImusY8"; // Ключ Gemini (надається автоматично середовищем)
 
   useEffect(() => {
     if (window.Telegram && window.Telegram.WebApp) {
