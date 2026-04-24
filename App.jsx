@@ -7,12 +7,12 @@ import { Camera, RefreshCcw, Sparkles, ShoppingBag, CheckCircle2, AlertCircle, C
 // --- НАЛАШТУВАННЯ FIREBASE ---
 // Замініть на ваші дані з Firebase Console -> Project Settings
 const firebaseConfig = {
-  apiKey: "ВАШ_API_KEY",
-  authDomain: "ВАШ_PROJECT_ID.firebaseapp.com",
-  projectId: "ВАШ_PROJECT_ID",
-  storageBucket: "ВАШ_PROJECT_ID.appspot.com",
-  messagingSenderId: "ВАШ_SENDER_ID",
-  appId: "ВАШ_APP_ID"
+  apiKey: "AIzaSyDkWgLdKqBA0fyuWvUUMpzQKiSBAB3O55U",
+  authDomain: "hillary-ai-consult.firebaseapp.com",
+  projectId: "hillary-ai-consult",
+  storageBucket: "hillary-ai-consult.firebasestorage.app",
+  messagingSenderId: "760792490149",
+  appId: "1:760792490149:web:63eecbc6712c39126a6d4c"
 };
 
 const app = initializeApp(firebaseConfig);
