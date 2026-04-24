@@ -2,88 +2,19 @@ import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, onSnapshot } from 'firebase/firestore';
-import { Camera, RefreshCcw, Sparkles, ShoppingBag, CheckCircle2, AlertCircle, ChevronRight, ExternalLink, Lightbulb, History, ArrowLeft } from 'lucide-react';
+import { Camera, RefreshCcw, Sparkles, ShoppingBag, CheckCircle2, AlertCircle, ChevronRight, ExternalLink, Lightbulb, History, ArrowLeft, Loader2 } from 'lucide-react';
 
-// --- Конфігурація Firebase (використовує змінні середовища) ---
+// --- Конфігурація Firebase ---
 const firebaseConfig = JSON.parse(__firebase_config);
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'hillary-skin-care-app';
 
-// --- База товарів HiLLARY (інтегровано з вашого JSON) ---
-const HILLARY_DATABASE = [
-  { 
-    id: "HI-08-720", 
-    name: "Сироватка-автозасмага Hillary Self Tan Serum", 
-    category: "Сонцезахист", 
-    description: "Надає шкірі природного відтінку засмаги та здорового сяйва. Містить компоненти для зволоження.",
-    link: "https://hillary.ua/syrovatka-avtozasmaha-dlia-oblychchia-hillary-self-tan-serum-30-ml" 
-  },
-  { 
-    id: "HI-08-111", 
-    name: "Очищуюча пінка Vitis Vinifera", 
-    category: "Очищення", 
-    description: "Для сухої та чутливої шкіри. Ніжно очищує, не пересушуючи, заспокоює подразнення.",
-    link: "https://hillary.ua/pinka-dlya-umyvannya-dlya-suhoyi-ta-chutlivoyi-shkiry-hillary-cleansing-foam-vitis-vinifera-skin-care-150-ml/" 
-  },
-  { 
-    id: "HI-08-112", 
-    name: "Очищуюча пінка Sulfate-free", 
-    category: "Очищення", 
-    description: "Для жирної та комбінованої шкіри. Глибоко очищує пори, регулює вироблення себуму та матує.",
-    link: "https://hillary.ua/pinka-dlya-umyvannya-dlya-zhyrnoyi-ta-kombinovanoyi-shkiry-hillary-cleansing-foam-sulfate-free-150-ml/" 
-  },
-  { 
-    id: "HI-08-721", 
-    name: "Убтан для м'якого очищення Hillary Ubtan", 
-    category: "Очищення", 
-    description: "100% натуральний засіб. Видаляє чорні цятки, звужує пори та вирівнює колір обличчя.",
-    link: "https://hillary.ua/ubtan-dlya-myakogo-ochyshchennya-ta-skrabuvannya-hillary-ubtan-75-g/" 
-  },
-  { 
-    id: "HI-08-654", 
-    name: "Сироватка з вітаміном С Hillary Vitamin C Serum", 
-    category: "Сироватки", 
-    description: "Освітлює пігментацію, вирівнює тон шкіри та стимулює синтез колагену.",
-    link: "https://hillary.ua/syrovatka-dlya-oblychchya-z-vitaminom-c-hillary-vitamin-c-serum-30-ml/" 
-  },
-  { 
-    id: "HI-08-332", 
-    name: "Крем з гіалуроновою кислотою Hyaluronic Cream", 
-    category: "Зволоження", 
-    description: "Відновлює захисний бар'єр, інтенсивно зволожує та утримує вологу.",
-    link: "https://hillary.ua/krem-dlya-oblychchya-z-gialuronovoyu-kyslotoyu-hillary-hyaluronic-cream-50-ml/" 
-  },
-  { 
-    id: "HI-08-990", 
-    name: "Мультикомплексна сироватка з ретинолом Hillary Bakuchiol", 
-    category: "Сироватки", 
-    description: "Антивіковий догляд. Бореться зі зморшками та покращує пружність шкіри.",
-    link: "https://hillary.ua/multykompleksna-syrovatka-z-retynolom-hillary-bakuchiol-retinol-serum-30-ml/" 
-  },
-  { 
-    id: "HI-08-105", 
-    name: "Гідрофільна олія Cleansing Oil", 
-    category: "Очищення", 
-    description: "Ефективно розчиняє макіяж та сонцезахисні засоби, не забиваючи пори.",
-    link: "https://hillary.ua/gidrofilna-oliya-dlya-vmyvannya-hillary-cleansing-oil-150-ml/" 
-  },
-  { 
-    id: "HI-08-120", 
-    name: "Тонік для жирної та комбінованої шкіри", 
-    category: "Тонізація", 
-    description: "Завершує процес очищення, балансує pH шкіри та матує.",
-    link: "https://hillary.ua/tonik-dlya-zhyrnoyi-ta-kombinovanoyi-shkiry-hillary-toner-moisturizing-skin-care-200-ml/" 
-  },
-  { 
-    id: "HI-08-655", 
-    name: "Крем-флюїд з вітаміном С Vitamin C Fluid", 
-    category: "Зволоження", 
-    description: "Легкий зволожуючий крем для надання здорового сяйва та захисту.",
-    link: "https://hillary.ua/krem-flyuyid-dlya-oblychchya-z-vitaminom-c-hillary-vitamin-c-fluid-cream-30-ml/" 
-  }
-];
+// --- URL вашого XML файлу ---
+const XML_URL = "https://hillary.ua/content/export/019d094ee103debf52c00b6828d5c1b3.xml";
+// Проксі для обходу обмежень CORS (допомагає завантажити файл з іншого домену)
+const PROXY_URL = "https://corsproxy.io/?"; 
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -95,12 +26,52 @@ export default function App() {
   const [recommendations, setRecommendations] = useState([]);
   const [pastAnalyses, setPastAnalyses] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [productsLoading, setProductsLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [hillaryProducts, setHillaryProducts] = useState([]);
   const apiKey = ""; 
+
+  // --- Завантаження та парсинг XML ---
+  useEffect(() => {
+    const loadProducts = async () => {
+      try {
+        setProductsLoading(true);
+        const response = await fetch(PROXY_URL + encodeURIComponent(XML_URL));
+        const text = await response.text();
+        
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(text, "text/xml");
+        const offers = xmlDoc.getElementsByTagName("offer");
+        
+        const parsedProducts = Array.from(offers).slice(0, 100).map(offer => {
+          const descriptionRaw = offer.getElementsByTagName("description")[0]?.textContent || "";
+          // Очищення опису від HTML тегів
+          const cleanDescription = descriptionRaw.replace(/<\/?[^>]+(>|$)/g, "").trim().substring(0, 200) + "...";
+          
+          return {
+            id: offer.querySelector('param[name="Артикул"]')?.textContent || offer.getAttribute('id'),
+            name: offer.getElementsByTagName("name")[0]?.textContent,
+            category: offer.getElementsByTagName("categoryId")[0]?.textContent,
+            description: cleanDescription,
+            link: offer.getElementsByTagName("url")[0]?.textContent,
+            price: offer.getElementsByTagName("price")[0]?.textContent
+          };
+        });
+
+        setHillaryProducts(parsedProducts);
+        setProductsLoading(false);
+      } catch (err) {
+        console.error("Помилка завантаження бази товарів:", err);
+        setError("Не вдалося завантажити базу товарів. Перевірте з'єднання.");
+        setProductsLoading(false);
+      }
+    };
+
+    loadProducts();
+  }, []);
 
   // --- Telegram SDK & Auth ---
   useEffect(() => {
-    // Ініціалізація Telegram WebApp
     if (window.Telegram && window.Telegram.WebApp) {
       const tg = window.Telegram.WebApp;
       tg.ready();
@@ -119,7 +90,7 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // --- Завантаження історії з Firestore ---
+  // --- Історія ---
   useEffect(() => {
     if (!user) return;
     const historyRef = collection(db, 'artifacts', appId, 'users', user.uid, 'history');
@@ -130,7 +101,6 @@ export default function App() {
     return () => unsubscribe();
   }, [user]);
 
-  // --- Обробка зображення ---
   const handleImageChange = (e) => {
     const file = e.target.files[0];
     if (file) {
@@ -144,31 +114,36 @@ export default function App() {
     }
   };
 
-  // --- Аналіз через Gemini API ---
   const performAnalysis = async () => {
+    if (hillaryProducts.length === 0) {
+      setError("База товарів ще завантажується. Зачекайте секунду.");
+      return;
+    }
+
     setLoading(true);
     setStep('analyzing');
     setError(null);
 
-    const catalogContext = HILLARY_DATABASE.map(p => 
-      `Арт: ${p.id}, Назва: ${p.name}, Призначення: ${p.description}`
+    // Передаємо лише частину бази, щоб не перевищити ліміт тексту для ШІ
+    const catalogContext = hillaryProducts.slice(0, 50).map(p => 
+      `Арт: ${p.id}, Назва: ${p.name}, Дія: ${p.description}`
     ).join('\n---\n');
 
     const systemPrompt = `Ти - професійний ШІ-косметолог HiLLARY Cosmetics.
     ТВОЇ ПРАВИЛА:
-    1. ВАЛІДАЦІЯ: Якщо на фото не обличчя людини (тварина, об'єкт, малюнок) - rejection_reason.
+    1. ВАЛІДАЦІЯ: Якщо на фото не обличчя людини - rejection_reason.
     2. АНАЛІЗ: Проаналізуй фото на пори, тон, зморшки, висипи.
-    3. РЕКОМЕНДАЦІЯ: Підбери 3-4 засоби ТІЛЬКИ з наданого списку.
+    3. РЕКОМЕНДАЦІЯ: Підбери 3-4 засоби ТІЛЬКИ з наданого списку товарів Hillary.
     4. ЗАБОРОНА: У полях "skin_condition" та "advice" НЕ ПИШИ артикули (ID). Тільки назви.
     
-    КАТАЛОГ:
+    АКТУАЛЬНИЙ КАТАЛОГ З XML:
     ${catalogContext}
 
     ВІДПОВІДЬ (JSON):
     {
       "is_human_face": true/false,
-      "rejection_reason": "чому не підходить фото",
-      "skin_type": "визначений тип",
+      "rejection_reason": "якщо фото не підходить",
+      "skin_type": "тип шкіри",
       "skin_condition": "діагноз українською без артикулів",
       "suggested_ids": ["масив Артикулів (ID)"],
       "advice": "порада без артикулів"
@@ -182,7 +157,7 @@ export default function App() {
           contents: [{
             role: "user",
             parts: [
-              { text: `Вік: ${userData.age}, Тип: ${userData.skinType}, Скарги: ${userData.concerns}. Проаналізуй фото та підбери догляд Hillary.` },
+              { text: `Вік: ${userData.age}, Тип: ${userData.skinType}, Скарги: ${userData.concerns}. Підбери догляд з нашого XML.` },
               { inlineData: { mimeType: "image/png", data: base64Image } }
             ]
           }],
@@ -196,13 +171,13 @@ export default function App() {
       const parsedData = JSON.parse(text);
       
       if (!parsedData.is_human_face) {
-        setError(parsedData.rejection_reason || "Ми не змогли розпізнати обличчя.");
+        setError(parsedData.rejection_reason || "Ми не розпізнали обличчя.");
         setStep('upload');
         return;
       }
 
       setAnalysis(parsedData);
-      const filteredRecs = HILLARY_DATABASE.filter(p => parsedData.suggested_ids.includes(p.id));
+      const filteredRecs = hillaryProducts.filter(p => parsedData.suggested_ids.includes(p.id));
       setRecommendations(filteredRecs);
       
       if (user) {
@@ -232,9 +207,12 @@ export default function App() {
           </div>
           <span className="font-bold text-lg tracking-tight">HiLLARY AI</span>
         </div>
-        <button onClick={() => setStep('history')} className="p-2 hover:bg-slate-50 rounded-full">
-          <History className="w-5 h-5 text-slate-400" />
-        </button>
+        <div className="flex items-center gap-3">
+          {productsLoading && <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />}
+          <button onClick={() => setStep('history')} className="p-2 hover:bg-slate-50 rounded-full">
+            <History className="w-5 h-5 text-slate-400" />
+          </button>
+        </div>
       </header>
 
       <main className="flex-1 overflow-y-auto">
@@ -243,21 +221,29 @@ export default function App() {
             <div className="w-24 h-24 bg-blue-50 rounded-full flex items-center justify-center mb-8 shadow-sm">
               <Sparkles className="w-12 h-12 text-blue-500" />
             </div>
-            <h1 className="text-3xl font-bold text-slate-800 mb-4">Твій персональний догляд</h1>
-            <p className="text-slate-500 mb-10 leading-relaxed">Ми проаналізуємо стан твоєї шкіри та підберемо ідеальну лінійку HiLLARY.</p>
-            <button onClick={() => setStep('upload')} className="w-full bg-blue-600 text-white py-5 rounded-2xl font-bold text-lg shadow-xl active:scale-95 transition-all">Почати</button>
+            <h1 className="text-3xl font-bold text-slate-800 mb-4 tracking-tight">Твій персональний догляд</h1>
+            <p className="text-slate-500 mb-10 leading-relaxed">
+              Наш ШІ аналізує вивантаження з сайту Hillary в реальному часі, щоб підібрати тобі найкраще.
+            </p>
+            <button 
+              disabled={productsLoading}
+              onClick={() => setStep('upload')} 
+              className="w-full bg-blue-600 text-white py-5 rounded-2xl font-bold text-lg shadow-xl active:scale-95 transition-all disabled:opacity-50"
+            >
+              {productsLoading ? "Завантаження бази..." : "Почати аналіз"}
+            </button>
           </div>
         )}
 
         {step === 'upload' && (
           <div className="p-6">
-            <h2 className="text-2xl font-bold mb-2">Крок 1: Фото</h2>
+            <h2 className="text-2xl font-bold mb-2 text-slate-800">Крок 1: Фото</h2>
             <p className="text-slate-500 mb-8 font-medium">Для точного аналізу зробіть чітке селфі при денному світлі.</p>
             <div className="border-2 border-dashed border-slate-200 rounded-[2rem] p-16 flex flex-col items-center justify-center bg-slate-50/50 hover:border-blue-400 transition-all">
               <input type="file" accept="image/*" onChange={handleImageChange} className="hidden" id="cam-input" />
               <label htmlFor="cam-input" className="cursor-pointer flex flex-col items-center">
                 <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mb-4 shadow-sm"><Camera className="text-blue-500 w-8 h-8" /></div>
-                <span className="font-bold text-slate-700">Зробити селфі</span>
+                <span className="font-bold text-slate-700 text-center">Завантажити селфі</span>
               </label>
             </div>
             {error && <div className="mt-4 p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-bold flex gap-2"><AlertCircle className="w-4 h-4 shrink-0"/>{error}</div>}
@@ -266,7 +252,7 @@ export default function App() {
 
         {step === 'questions' && (
           <div className="p-6 animate-in slide-in-from-right-10">
-            <h2 className="text-2xl font-bold mb-6">Крок 2: Деталі</h2>
+            <h2 className="text-2xl font-bold mb-6 text-slate-800">Крок 2: Деталі</h2>
             <div className="space-y-6">
               <div>
                 <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1 block mb-2">Твій вік</label>
@@ -304,7 +290,7 @@ export default function App() {
           <div className="flex flex-col items-center justify-center min-h-[80vh] p-8 text-center">
             <RefreshCcw className="w-12 h-12 text-blue-600 animate-spin mb-6"/>
             <h3 className="text-xl font-bold">Створюємо твою програму...</h3>
-            <p className="text-slate-400 text-sm mt-2 leading-relaxed">ШІ вивчає твоє фото та асортимент HiLLARY Cosmetics</p>
+            <p className="text-slate-400 text-sm mt-2 leading-relaxed">ШІ вивчає XML вивантаження Hillary Cosmetics</p>
           </div>
         )}
 
@@ -316,7 +302,7 @@ export default function App() {
               <button onClick={() => setStep('upload')} className="absolute top-4 right-4 bg-white/80 p-3 rounded-full shadow-lg"><RefreshCcw className="w-5 h-5 text-slate-700" /></button>
             </div>
             <div className="px-6 -mt-10 relative z-10">
-              <div className="bg-white rounded-[2rem] p-6 shadow-2xl border border-slate-50 mb-8">
+              <div className="bg-white rounded-[2rem] p-6 shadow-2xl border border-slate-100 mb-8">
                 <h3 className="font-bold text-lg mb-4 flex items-center gap-2 text-slate-800"><CheckCircle2 className="text-green-500 w-5 h-5"/> Результати аналізу</h3>
                 <p className="text-slate-700 text-sm mb-6 leading-relaxed font-medium">{analysis?.skin_condition}</p>
                 <div className="bg-blue-50 p-5 rounded-2xl flex items-start gap-3 border-l-4 border-blue-600 shadow-sm">
@@ -334,7 +320,10 @@ export default function App() {
                     </div>
                     <h4 className="font-black text-slate-800 text-md leading-tight mb-2">{item.name}</h4>
                     <p className="text-slate-500 text-xs leading-relaxed mb-4 font-medium">{item.description}</p>
-                    <a href={item.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-blue-600 text-xs font-black uppercase tracking-widest">Замовити на сайті <ChevronRight className="w-4 h-4" /></a>
+                    <div className="flex items-center justify-between">
+                       <span className="font-black text-blue-600 text-lg">{item.price} грн</span>
+                       <a href={item.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-blue-600 text-xs font-black uppercase tracking-widest">Купити <ChevronRight className="w-4 h-4" /></a>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -346,10 +335,10 @@ export default function App() {
         {step === 'history' && (
           <div className="p-6">
             <button onClick={() => setStep('welcome')} className="mb-6 flex items-center gap-2 text-slate-400 font-black text-[10px] uppercase tracking-widest"><ArrowLeft className="w-4 h-4"/> Назад</button>
-            <h2 className="text-2xl font-black mb-8">Історія</h2>
+            <h2 className="text-2xl font-black mb-8 text-slate-800">Історія аналізів</h2>
             <div className="space-y-4">
               {pastAnalyses.length === 0 ? (
-                <div className="text-center py-24 text-slate-300 font-bold italic">Тут поки порожньо</div>
+                <div className="text-center py-24 text-slate-300 font-bold italic">Історія порожня</div>
               ) : (
                 pastAnalyses.map(item => (
                   <div key={item.id} className="bg-white border border-slate-100 p-4 rounded-2xl shadow-sm flex items-center gap-4">
@@ -358,7 +347,17 @@ export default function App() {
                       <p className="text-[10px] text-slate-400 font-black uppercase">{new Date(item.date).toLocaleDateString()}</p>
                       <h4 className="font-bold text-slate-800 text-sm">{item.analysis.skin_type || 'Тип не вказано'}</h4>
                     </div>
-                    <button onClick={() => { setAnalysis(item.analysis); setImage(item.userPhoto); setRecommendations(HILLARY_DATABASE.filter(p => item.recommendationIds.includes(p.id))); setStep('results'); }} className="text-blue-600 font-black text-[10px] uppercase tracking-tighter">Дивитись</button>
+                    <button 
+                      onClick={() => { 
+                        setAnalysis(item.analysis); 
+                        setImage(item.userPhoto); 
+                        setRecommendations(hillaryProducts.filter(p => item.recommendationIds.includes(p.id))); 
+                        setStep('results'); 
+                      }} 
+                      className="text-blue-600 font-black text-[10px] uppercase tracking-tighter"
+                    >
+                      Дивитись
+                    </button>
                   </div>
                 ))
               )}
