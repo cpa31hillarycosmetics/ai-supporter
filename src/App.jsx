@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, addDoc, onSnapshot } from 'firebase/firestore';
-import { Camera, RefreshCcw, Sparkles, ShoppingBag, CheckCircle2, AlertCircle, ChevronRight, ExternalLink, Lightbulb, History, ArrowLeft, Loader2 } from 'lucide-react';
+import { getFirestore, collection, addDoc, onSnapshot, doc, getDoc, setDoc } from 'firebase/firestore';
+import { Camera, RefreshCcw, Sparkles, ShoppingBag, CheckCircle2, AlertCircle, ChevronRight, ExternalLink, Lightbulb, History, ArrowLeft, Loader2, Home, User, Save } from 'lucide-react';
 
-// 1. ЗАМІНІТЬ ЦІ ДАНІ НА ВАШІ З FIREBASE CONSOLE
+// --- НАЛАШТУВАННЯ FIREBASE ---
 const firebaseConfig = {
-  apiKey: "AIzaSyDkWgLdKqBA0fyuWvUUMpzQKiSBAB3O55U",
+ apiKey: "AIzaSyDkWgLdKqBA0fyuWvUUMpzQKiSBAB3O55U",
   authDomain: "hillary-ai-consult.firebaseapp.com",
   projectId: "hillary-ai-consult",
   storageBucket: "hillary-ai-consult.firebasestorage.app",
@@ -19,10 +19,9 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = 'hillary-skin-care-app';
 
-// 2. ВСТАВТЕ ВАШ КЛЮЧ GEMINI (ОТРИМАЙТЕ НА [https://aistudio.google.com/](https://aistudio.google.com/))
+// --- НАЛАШТУВАННЯ API GEMINI ---
 const GEMINI_API_KEY = "AIzaSyC6zqfwIA1yEpA50rq4-ownpB0bwImusY8";
 
-// Прямі посилання без зайвих символів
 const XML_URL = "[https://hillary.ua/content/export/019d094ee103debf52c00b6828d5c1b3.xml](https://hillary.ua/content/export/019d094ee103debf52c00b6828d5c1b3.xml)";
 const PROXY_URL = "[https://corsproxy.io/](https://corsproxy.io/)?"; 
 
@@ -36,82 +35,111 @@ export default function App() {
   const [recommendations, setRecommendations] = useState([]);
   const [pastAnalyses, setPastAnalyses] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [productsLoading, setProductsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [hillaryProducts, setHillaryProducts] = useState([]);
+  const [isProfileSaving, setIsProfileSaving] = useState(false);
+  const [profileData, setProfileData] = useState({ age: '', skinType: '' });
 
+  // 1. Авторизація та Telegram SDK
   useEffect(() => {
     if (window.Telegram && window.Telegram.WebApp) {
-      window.Telegram.WebApp.ready();
-      window.Telegram.WebApp.expand();
+      const tg = window.Telegram.WebApp;
+      tg.ready();
+      tg.expand();
+      tg.setHeaderColor('#ffffff');
     }
-    const initAuth = async () => {
-      try { await signInAnonymously(auth); } catch (e) { console.error("Auth error", e); }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, (u) => setUser(u));
+    signInAnonymously(auth).catch(console.error);
+    const unsubscribe = onAuthStateChanged(auth, u => setUser(u));
     return () => unsubscribe();
   }, []);
 
-  useEffect(() => {
-    const fetchXML = async () => {
-      try {
-        const response = await fetch(PROXY_URL + encodeURIComponent(XML_URL));
-        const text = await response.text();
-        const parser = new DOMParser();
-        const xml = parser.parseFromString(text, "text/xml");
-        const offers = xml.getElementsByTagName("offer");
-        const parsed = Array.from(offers).map(offer => ({
-          id: offer.querySelector('param[name="Артикул"]')?.textContent || offer.getAttribute('id'),
-          name: offer.getElementsByTagName("name")[0]?.textContent,
-          description: (offer.getElementsByTagName("description")[0]?.textContent || "").replace(/<\/?[^>]+(>|$)/g, "").trim().substring(0, 200),
-          link: offer.getElementsByTagName("url")[0]?.textContent,
-          price: offer.getElementsByTagName("price")[0]?.textContent
-        }));
-        setHillaryProducts(parsed);
-        setProductsLoading(false);
-      } catch (err) {
-        setProductsLoading(false);
-      }
-    };
-    fetchXML();
-  }, []);
-
+  // 2. Завантаження Профілю та Історії
   useEffect(() => {
     if (!user) return;
-    const historyRef = collection(db, 'artifacts', appId, 'users', user.uid, 'history');
-    const unsubscribe = onSnapshot(historyRef, (snap) => {
-      const items = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setPastAnalyses(items.sort((a, b) => new Date(b.date) - new Date(a.date)));
-    }, (err) => {
-      console.error("Firestore error!", err);
+    
+    const fetchProfile = async () => {
+      try {
+        const profileRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'data');
+        const profileSnap = await getDoc(profileRef);
+        if (profileSnap.exists()) {
+          const data = profileSnap.data();
+          setProfileData({ age: data.age, skinType: data.skinType });
+          setUserData(prev => ({ ...prev, age: data.age, skinType: data.skinType || 'не знаю' }));
+        }
+      } catch (e) { console.error("Profile error", e); }
+    };
+    fetchProfile();
+
+    const q = collection(db, 'artifacts', appId, 'users', user.uid, 'history');
+    return onSnapshot(q, (snap) => {
+      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setPastAnalyses(docs.sort((a, b) => new Date(b.date) - new Date(a.date)));
     });
-    return () => unsubscribe();
   }, [user]);
 
-  const handlePhoto = (e) => {
+  // 3. Завантаження бази товарів (XML)
+  useEffect(() => {
+    const fetchBase = async () => {
+      try {
+        const res = await fetch(PROXY_URL + encodeURIComponent(XML_URL));
+        const text = await res.text();
+        const xml = new DOMParser().parseFromString(text, "text/xml");
+        const items = Array.from(xml.getElementsByTagName("offer")).map(o => ({
+          id: o.querySelector('param[name="Артикул"]')?.textContent || o.getAttribute('id'),
+          name: o.getElementsByTagName("name")[0]?.textContent,
+          description: (o.getElementsByTagName("description")[0]?.textContent || "").replace(/<\/?[^>]+(>|$)/g, "").trim().substring(0, 200),
+          link: o.getElementsByTagName("url")[0]?.textContent,
+          price: o.getElementsByTagName("price")[0]?.textContent
+        }));
+        setHillaryProducts(items);
+      } catch (e) { console.error("Catalog error", e); }
+    };
+    fetchBase();
+  }, []);
+
+  const saveProfile = async (manual = false) => {
+    if (!user) return;
+    if (manual) setIsProfileSaving(true);
+    try {
+      await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'data'), {
+        age: userData.age,
+        skinType: userData.skinType,
+        updatedAt: new Date().toISOString()
+      });
+      setProfileData({ age: userData.age, skinType: userData.skinType });
+    } catch (e) { console.error("Save profile error", e); }
+    if (manual) setIsProfileSaving(false);
+  };
+
+  const handleCapture = (e) => {
     const file = e.target.files[0];
     if (file) {
+      setImage(URL.createObjectURL(file));
       const reader = new FileReader();
       reader.onloadend = () => {
-        setImage(URL.createObjectURL(file));
         setBase64Image(reader.result.split(',')[1]);
+        // Автозаповнення даних з профілю перед переходом до анкети
+        setUserData(prev => ({ ...prev, age: profileData.age, skinType: profileData.skinType || 'не знаю' }));
         setStep('questions');
       };
       reader.readAsDataURL(file);
     }
   };
 
-  const startAnalysis = async () => {
-    if (!GEMINI_API_KEY || GEMINI_API_KEY.includes("ТУТ_ВАШ_КЛЮЧ")) {
-      setError("Помилка: Ви не вставили API Ключ Gemini");
+  const processAnalysis = async () => {
+    if (!GEMINI_API_KEY || GEMINI_API_KEY.includes("ВАШ_")) {
+      setError("Помилка: Ключ API не налаштований.");
       return;
     }
+
     setLoading(true);
     setStep('analyzing');
-    const catalog = hillaryProducts.slice(0, 40).map(p => `Арт: ${p.id}, Назва: ${p.name}, Дія: ${p.description}`).join('\n');
-    const prompt = `Ти - косметолог HiLLARY. Проаналізуй фото. Підбери 3-4 ID зі списку. Не пиши ID в тексті. Спирайся на: ${catalog}`;
-    
+    setError(null);
+    await saveProfile(); 
+
+    const context = hillaryProducts.slice(0, 40).map(p => `ID:${p.id} | ${p.name} | ${p.description}`).join('\n');
+    const prompt = `Ти - косметолог Hillary. Проаналізуй фото. Підбери 3-4 ID зі списку. Каталог: ${context}`;
+
     try {
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`, {
         method: 'POST',
@@ -124,122 +152,207 @@ export default function App() {
       });
 
       const data = await res.json();
-      if (!data.candidates) throw new Error(data.error?.message || "API помилка");
+      const result = JSON.parse(data.candidates[0].content.parts[0].text);
 
-      const parsed = JSON.parse(data.candidates[0].content.parts[0].text);
-      if (!parsed.is_human_face) {
-        setError(parsed.rejection_reason || "Це не обличчя");
+      if (!result.is_human_face) {
+        setError(result.rejection_reason || "Ми не впізнали обличчя на фото.");
         setStep('upload');
-        setLoading(false);
         return;
       }
-      setAnalysis(parsed);
-      const recs = hillaryProducts.filter(p => parsed.suggested_ids.includes(p.id));
-      setRecommendations(recs);
+
+      setAnalysis(result);
+      setRecommendations(hillaryProducts.filter(p => result.suggested_ids.includes(p.id)));
+
       if (user) {
         await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'history'), {
           date: new Date().toISOString(),
-          analysis: parsed,
-          recommendationIds: recs.map(r => r.id),
+          analysis: result,
+          recommendationIds: result.suggested_ids,
           userPhoto: image
         });
       }
       setStep('results');
     } catch (e) {
-      setError("Помилка: " + e.message);
+      setError("Помилка аналізу. Спробуйте ще раз.");
       setStep('questions');
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   return (
-    <div className="min-h-screen bg-white max-w-md mx-auto shadow-2xl flex flex-col relative font-sans text-slate-900">
-      <header className="sticky top-0 bg-white/90 backdrop-blur-md z-50 px-6 py-4 border-b flex items-center justify-between">
+    <div className="min-h-screen bg-white max-w-md mx-auto shadow-2xl flex flex-col relative font-sans text-slate-900 pb-20">
+      {/* Header */}
+      <header className="sticky top-0 bg-white/95 backdrop-blur-md z-50 px-6 py-4 border-b border-slate-100 flex items-center justify-between">
         <div className="flex items-center gap-2 cursor-pointer" onClick={() => setStep('welcome')}>
-          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center"><span className="text-white font-black text-sm">H</span></div>
-          <span className="font-bold text-lg">HiLLARY AI</span>
+          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center -rotate-2 shadow-sm">
+            <span className="text-white font-black text-sm">H</span>
+          </div>
+          <span className="font-bold text-lg tracking-tight uppercase">HiLLARY AI</span>
         </div>
-        <button onClick={() => setStep('history')} className="p-2"><History className="w-5 h-5 text-slate-400" /></button>
+        {image && (step === 'questions' || step === 'results') && (
+            <div className="w-10 h-10 rounded-xl overflow-hidden border-2 border-blue-50 shadow-sm transition-all">
+                <img src={image} className="w-full h-full object-cover" />
+            </div>
+        )}
       </header>
-      <main className="flex-1 overflow-y-auto pb-10">
+
+      <main className="flex-1 overflow-y-auto">
         {step === 'welcome' && (
-          <div className="p-8 text-center mt-20">
-            <Sparkles className="w-16 h-16 text-blue-500 mx-auto mb-6" />
-            <h1 className="text-2xl font-bold mb-4">Розумний догляд</h1>
-            <p className="text-slate-500 mb-10 text-sm">ШІ підбере догляд Hillary, проаналізувавши ваше фото та XML сайту.</p>
-            <button disabled={productsLoading} onClick={() => setStep('upload')} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold transition-all active:scale-95">{productsLoading ? "Завантаження..." : "Почати"}</button>
+          <div className="p-8 text-center mt-20 animate-in">
+            <div className="w-24 h-24 bg-blue-50 rounded-[2.5rem] flex items-center justify-center mx-auto mb-8 shadow-inner">
+              <Sparkles className="w-12 h-12 text-blue-500" />
+            </div>
+            <h1 className="text-3xl font-black mb-4 tracking-tight uppercase leading-tight">Експертний<br/>підбір</h1>
+            <p className="text-slate-500 mb-12 leading-relaxed text-sm font-medium px-4">Зроби фото та отримай персональну програму догляду від HiLLARY Cosmetics.</p>
+            <button onClick={() => setStep('upload')} className="w-full bg-blue-600 text-white py-5 rounded-[2rem] font-bold text-lg shadow-xl shadow-blue-50 active:scale-95 transition-all uppercase tracking-wider">Почати підбір</button>
           </div>
         )}
+
         {step === 'upload' && (
-          <div className="p-6">
-            <h2 className="text-xl font-bold mb-6 text-slate-800">Крок 1: Фото</h2>
-            <div className="border-2 border-dashed border-slate-200 rounded-3xl p-12 text-center bg-slate-50">
-              <input type="file" accept="image/*" onChange={handlePhoto} className="hidden" id="cam" />
-              <label htmlFor="cam" className="cursor-pointer flex flex-col items-center">
-                <Camera className="text-blue-500 w-10 h-10 mb-4" />
-                <span className="font-bold text-slate-700">Зробити селфі</span>
-              </label>
-            </div>
-            {error && <div className="mt-4 p-4 bg-red-50 text-red-600 rounded-xl text-xs font-bold">{error}</div>}
-          </div>
-        )}
-        {step === 'questions' && (
-          <div className="p-6 space-y-6 animate-in slide-in-from-right-5">
-            <h2 className="text-xl font-bold text-slate-800">Крок 2: Деталі</h2>
-            <input type="number" placeholder="Вік" className="w-full p-4 border rounded-xl outline-none focus:border-blue-500" onChange={(e) => setUserData({...userData, age: e.target.value})} />
-            <div className="grid grid-cols-2 gap-2">
-              {['Суха', 'Жирна', 'Комбінована', 'Не знаю'].map(t => (
-                <button key={t} onClick={() => setUserData({...userData, skinType: t})} className={`p-3 border rounded-xl text-xs font-bold transition-all ${userData.skinType === t ? 'border-blue-600 bg-blue-50 text-blue-600' : ''}`}>{t}</button>
-              ))}
-            </div>
-            <textarea placeholder="Що вас турбує?" className="w-full p-4 border rounded-xl h-24 outline-none focus:border-blue-500" onChange={(e) => setUserData({...userData, concerns: e.target.value})} />
-            {error && <div className="p-3 bg-red-50 text-red-600 text-[10px] font-bold rounded-lg">{error}</div>}
-            <button onClick={startAnalysis} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold shadow-lg transition-transform active:scale-95">Отримати рекомендації</button>
-          </div>
-        )}
-        {step === 'analyzing' && <div className="p-20 text-center mt-20"><Loader2 className="w-10 h-10 animate-spin text-blue-600 mx-auto mb-4"/><p className="font-bold text-slate-400">Аналізуємо шкіру...</p></div>}
-        {step === 'results' && (
-          <div className="p-6 animate-in fade-in">
-            <img src={image} className="w-full h-48 object-cover rounded-3xl mb-6 shadow-lg" />
-            <div className="bg-white border rounded-3xl p-6 mb-8 shadow-sm">
-              <h3 className="font-bold mb-2 text-slate-800">Висновок</h3>
-              <p className="text-sm text-slate-600 leading-relaxed mb-4">{analysis?.skin_condition}</p>
-              <div className="bg-blue-50 p-4 rounded-xl text-blue-800 text-xs italic font-medium">"{analysis?.advice}"</div>
-            </div>
-            <h3 className="font-bold mb-4 px-2 text-slate-800">Рекомендовано:</h3>
-            <div className="space-y-4">
-              {recommendations.map(p => (
-                <div key={p.id} className="border p-4 rounded-2xl flex justify-between items-center bg-white shadow-sm hover:border-blue-300 transition-colors">
-                  <div className="flex-1 pr-4">
-                    <p className="text-[10px] text-slate-400 font-bold tracking-widest uppercase">АРТ: {p.id}</p>
-                    <h4 className="font-bold text-sm leading-tight mb-1">{p.name}</h4>
-                    <p className="font-bold text-blue-600">{p.price} грн</p>
-                  </div>
-                  <a href={p.link} target="_blank" className="bg-blue-50 p-3 rounded-full text-blue-600 hover:bg-blue-600 hover:text-white transition-all"><ExternalLink className="w-5 h-5" /></a>
-                </div>
-              ))}
-            </div>
-            <button onClick={() => setStep('welcome')} className="w-full mt-10 py-3 text-slate-400 font-bold uppercase text-[10px] tracking-widest hover:text-blue-600">Новий аналіз</button>
-          </div>
-        )}
-        {step === 'history' && (
-          <div className="p-6 animate-in slide-in-from-left-5">
+          <div className="p-6 animate-in">
             <button onClick={() => setStep('welcome')} className="mb-6 flex items-center gap-2 text-slate-400 text-xs font-bold uppercase"><ArrowLeft className="w-4 h-4"/> Назад</button>
-            <h2 className="text-xl font-bold mb-6 text-slate-800 font-black tracking-tight">ІСТОРІЯ</h2>
-            {pastAnalyses.length === 0 ? <p className="text-center text-slate-300 py-10 font-bold uppercase text-xs">Поки порожньо</p> : pastAnalyses.map(item => (
-              <div key={item.id} className="border p-3 rounded-2xl mb-3 flex items-center gap-3 bg-white shadow-sm">
-                <img src={item.userPhoto} className="w-12 h-12 rounded-lg object-cover" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-[10px] text-slate-400">{new Date(item.date).toLocaleDateString()}</p>
-                  <h4 className="font-bold text-xs truncate">{item.analysis.skin_type} тип</h4>
+            <h2 className="text-2xl font-black mb-2 uppercase tracking-tight">Крок 1: Фото</h2>
+            <p className="text-slate-500 mb-8 text-sm font-medium">Система проаналізує стан шкіри по вашому селфі.</p>
+            <div className="border-2 border-dashed border-slate-200 rounded-[3rem] p-16 flex flex-col items-center bg-slate-50/50 relative hover:bg-slate-100 transition-colors cursor-pointer">
+              <input type="file" accept="image/*" onChange={handleCapture} className="absolute inset-0 opacity-0 cursor-pointer" />
+              <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mb-4 shadow-sm">
+                <Camera className="text-blue-500 w-8 h-8" />
+              </div>
+              <span className="font-bold text-slate-700">Натисни для фото</span>
+            </div>
+            {error && <div className="mt-6 p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-bold">{error}</div>}
+          </div>
+        )}
+
+        {step === 'questions' && (
+          <div className="p-6 space-y-8 animate-in">
+            <button onClick={() => setStep('upload')} className="mb-2 flex items-center gap-2 text-slate-400 text-xs font-bold uppercase"><ArrowLeft className="w-4 h-4"/> Назад до фото</button>
+            <h2 className="text-2xl font-black uppercase tracking-tight">Крок 2: Деталі</h2>
+            <div className="space-y-6">
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Вік</label>
+                <input type="number" value={userData.age} className="w-full p-4 rounded-2xl border border-slate-100 focus:border-blue-500 outline-none font-bold text-lg" onChange={(e) => setUserData({...userData, age: e.target.value})} />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Тип шкіри</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {['Суха', 'Жирна', 'Комбінована', 'Не знаю'].map(t => (
+                    <button key={t} onClick={() => setUserData({...userData, skinType: t})} className={`p-4 rounded-2xl border-2 font-bold text-xs transition-all ${userData.skinType === t ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-slate-50 text-slate-400'}`}>{t}</button>
+                  ))}
                 </div>
-                <button onClick={() => { setAnalysis(item.analysis); setImage(item.userPhoto); setRecommendations(hillaryProducts.filter(p => item.recommendationIds.includes(p.id))); setStep('results'); }} className="text-blue-600 text-[10px] font-bold uppercase px-2 py-1 bg-blue-50 rounded-lg">Дивитись</button>
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Що тебе турбує?</label>
+                <textarea value={userData.concerns} placeholder="Опиши свої скарги..." className="w-full p-4 rounded-2xl border border-slate-100 focus:border-blue-500 h-28 resize-none text-sm font-medium outline-none" onChange={(e) => setUserData({...userData, concerns: e.target.value})} />
+              </div>
+              <button onClick={processAnalysis} disabled={!userData.age || loading} className="w-full bg-blue-600 text-white py-5 rounded-[2rem] font-bold shadow-xl active:scale-95 transition-all uppercase tracking-widest">Аналізувати</button>
+            </div>
+            {error && <div className="p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-bold">{error}</div>}
+          </div>
+        )}
+
+        {step === 'analyzing' && (
+          <div className="flex flex-col items-center justify-center min-h-[70vh] p-8 text-center animate-pulse">
+            <Loader2 className="w-12 h-12 text-blue-600 animate-spin mb-6"/>
+            <h3 className="text-xl font-bold uppercase tracking-tight">Обробляємо дані...</h3>
+            <p className="text-slate-400 text-sm mt-2 font-medium italic">ШІ підбирає найкраще з асортименту Hillary</p>
+          </div>
+        )}
+
+        {step === 'results' && analysis && (
+          <div className="pb-12 animate-in">
+             <div className="h-56 relative shadow-md">
+              <img src={image} className="w-full h-full object-cover" />
+              <div className="absolute inset-0 bg-gradient-to-t from-white via-transparent"></div>
+              <button onClick={() => setStep('upload')} className="absolute top-4 right-4 bg-white/80 p-3 rounded-full shadow-lg"><RefreshCcw className="w-5 h-5 text-slate-700" /></button>
+            </div>
+            
+            <div className="px-6 -mt-10 relative z-10">
+              <div className="bg-white rounded-[2.5rem] p-6 shadow-2xl border border-slate-50 mb-8">
+                <h3 className="font-bold text-lg mb-4 flex items-center gap-2 uppercase tracking-tight italic"><CheckCircle2 className="text-green-500 w-5 h-5"/> Висновок</h3>
+                <p className="text-slate-700 text-sm mb-6 leading-relaxed font-medium">{analysis.skin_condition}</p>
+                <div className="bg-blue-50 p-5 rounded-3xl flex items-start gap-3 border-l-4 border-blue-600 shadow-sm">
+                  <Lightbulb className="w-5 h-5 text-blue-600 mt-1 shrink-0" />
+                  <p className="text-blue-900 text-sm italic font-bold leading-relaxed">"{analysis.advice}"</p>
+                </div>
+              </div>
+
+              <h3 className="text-xl font-black text-slate-800 mb-6 px-2 uppercase tracking-tight">Твій догляд:</h3>
+              <div className="space-y-4">
+                {recommendations.map(p => (
+                  <div key={p.id} className="bg-white border border-slate-100 p-5 rounded-[2.5rem] shadow-sm">
+                    <div className="flex items-start justify-between mb-3">
+                      <span className="text-[9px] font-black text-slate-300 uppercase tracking-widest">АРТ: {p.id}</span>
+                      <a href={p.link} target="_blank" rel="noopener noreferrer" className="text-blue-500 p-2 bg-blue-50 rounded-xl hover:bg-blue-600 transition-all"><ExternalLink className="w-4 h-4" /></a>
+                    </div>
+                    <h4 className="font-black text-slate-800 text-md leading-tight mb-2">{p.name}</h4>
+                    <p className="text-slate-500 text-xs leading-relaxed mb-4 font-medium">{p.description}</p>
+                    <div className="flex justify-between items-center">
+                        <span className="text-xl font-black text-blue-600">{p.price} грн</span>
+                        <a href={p.link} target="_blank" className="bg-blue-50 text-blue-600 text-[10px] font-black uppercase tracking-widest px-6 py-3 rounded-2xl active:bg-blue-600 active:text-white transition-all">Купити</a>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === 'history' && (
+          <div className="p-6 animate-in">
+            <h2 className="text-2xl font-black mb-8 uppercase tracking-tight text-slate-800">Історія</h2>
+            {pastAnalyses.length === 0 ? <p className="text-center py-24 text-slate-300 font-bold uppercase text-xs tracking-widest">Історія порожня</p> : pastAnalyses.map(item => (
+              <div key={item.id} className="p-4 rounded-[2rem] mb-4 flex items-center gap-4 bg-slate-50 shadow-sm border border-slate-100 transition-transform active:scale-95">
+                <img src={item.userPhoto} className="w-16 h-16 rounded-2xl object-cover shadow-sm" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-[9px] text-slate-400 font-bold">{new Date(item.date).toLocaleDateString()}</p>
+                  <h4 className="font-black text-xs truncate uppercase tracking-tighter text-slate-800">{item.analysis.skin_type || 'Тип'} шкіри</h4>
+                </div>
+                <button onClick={() => { setAnalysis(item.analysis); setImage(item.userPhoto); setRecommendations(hillaryProducts.filter(p => item.recommendationIds.includes(p.id))); setStep('results'); }} className="text-blue-600 text-[9px] font-black uppercase px-4 py-2 bg-white rounded-xl shadow-sm">Перегляд</button>
               </div>
             ))}
           </div>
         )}
+
+        {step === 'profile' && (
+          <div className="p-6 space-y-8 animate-in">
+            <h2 className="text-2xl font-black mb-8 uppercase tracking-tight text-slate-800">Мій Профіль</h2>
+            <div className="space-y-6">
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Вік</label>
+                <input type="number" value={userData.age} className="w-full p-5 rounded-2xl border border-slate-100 focus:border-blue-500 outline-none font-bold text-lg" onChange={(e) => setUserData({...userData, age: e.target.value})} />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Тип шкіри</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {['Суха', 'Жирна', 'Комбінована', 'Не знаю'].map(t => (
+                    <button key={t} onClick={() => setUserData({...userData, skinType: t})} className={`p-4 rounded-2xl border-2 font-bold text-xs transition-all ${userData.skinType === t ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-slate-50 text-slate-400'}`}>{t}</button>
+                  ))}
+                </div>
+              </div>
+              <button onClick={() => saveProfile(true)} disabled={isProfileSaving} className="w-full bg-slate-900 text-white py-5 rounded-[2rem] font-bold shadow-lg flex items-center justify-center gap-3 transition-transform active:scale-95 uppercase tracking-widest">
+                {isProfileSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
+                {isProfileSaving ? "Зберігаємо..." : "Зберегти"}
+              </button>
+            </div>
+          </div>
+        )}
       </main>
+
+      {/* Navigation Bar */}
+      <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/95 backdrop-blur-md border-t border-slate-100 h-20 px-8 flex items-center justify-between z-50">
+        <button onClick={() => setStep('welcome')} className={`flex flex-col items-center gap-1 transition-all ${['welcome', 'upload', 'questions', 'analyzing', 'results'].includes(step) ? 'text-blue-600' : 'text-slate-300'}`}>
+          <Home className="w-6 h-6" />
+          <span className="text-[9px] font-black uppercase tracking-tighter">Дім</span>
+        </button>
+        <button onClick={() => setStep('history')} className={`flex flex-col items-center gap-1 transition-all ${step === 'history' ? 'text-blue-600' : 'text-slate-300'}`}>
+          <History className="w-6 h-6" />
+          <span className="text-[9px] font-black uppercase tracking-tighter">Історія</span>
+        </button>
+        <button onClick={() => setStep('profile')} className={`flex flex-col items-center gap-1 transition-all ${step === 'profile' ? 'text-blue-600' : 'text-slate-300'}`}>
+          <User className="w-6 h-6" />
+          <span className="text-[9px] font-black uppercase tracking-tighter">Профіль</span>
+        </button>
+      </nav>
     </div>
   );
 }
