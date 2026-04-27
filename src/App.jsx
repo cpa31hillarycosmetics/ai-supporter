@@ -4,6 +4,7 @@ import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, onSnapshot } from 'firebase/firestore';
 import { Camera, RefreshCcw, Sparkles, ShoppingBag, CheckCircle2, AlertCircle, ChevronRight, ExternalLink, Lightbulb, History, ArrowLeft, Loader2 } from 'lucide-react';
 
+// 1. ЗАМІНІТЬ ЦІ ДАНІ НА ВАШІ З FIREBASE CONSOLE
 const firebaseConfig = {
   apiKey: "AIzaSyDkWgLdKqBA0fyuWvUUMpzQKiSBAB3O55U",
   authDomain: "hillary-ai-consult.firebaseapp.com",
@@ -18,7 +19,10 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = 'hillary-skin-care-app';
 
+// 2. ВСТАВТЕ ВАШ КЛЮЧ GEMINI (ОТРИМАЙТЕ НА [https://aistudio.google.com/](https://aistudio.google.com/))
 const GEMINI_API_KEY = "AIzaSyC6zqfwIA1yEpA50rq4-ownpB0bwImusY8";
+
+// Прямі посилання без зайвих символів
 const XML_URL = "[https://hillary.ua/content/export/019d094ee103debf52c00b6828d5c1b3.xml](https://hillary.ua/content/export/019d094ee103debf52c00b6828d5c1b3.xml)";
 const PROXY_URL = "[https://corsproxy.io/](https://corsproxy.io/)?"; 
 
