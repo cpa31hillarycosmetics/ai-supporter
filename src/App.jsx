@@ -5,8 +5,9 @@ import { getFirestore, collection, addDoc, onSnapshot, doc, getDoc, setDoc } fro
 import { Camera, RefreshCcw, Sparkles, ShoppingBag, CheckCircle2, AlertCircle, ChevronRight, ExternalLink, Lightbulb, History, ArrowLeft, Loader2, Home, User, Save } from 'lucide-react';
 
 // --- НАЛАШТУВАННЯ FIREBASE ---
+// ВСТАВТЕ СВОЇ ДАНІ ТУТ
 const firebaseConfig = {
- apiKey: "AIzaSyDkWgLdKqBA0fyuWvUUMpzQKiSBAB3O55U",
+  apiKey: "AIzaSyDkWgLdKqBA0fyuWvUUMpzQKiSBAB3O55U",
   authDomain: "hillary-ai-consult.firebaseapp.com",
   projectId: "hillary-ai-consult",
   storageBucket: "hillary-ai-consult.firebasestorage.app",
@@ -20,6 +21,7 @@ const db = getFirestore(app);
 const appId = 'hillary-skin-care-app';
 
 // --- НАЛАШТУВАННЯ API GEMINI ---
+// ВСТАВТЕ СВІЙ КЛЮЧ ТУТ
 const GEMINI_API_KEY = "AIzaSyC6zqfwIA1yEpA50rq4-ownpB0bwImusY8";
 
 const XML_URL = "[https://hillary.ua/content/export/019d094ee103debf52c00b6828d5c1b3.xml](https://hillary.ua/content/export/019d094ee103debf52c00b6828d5c1b3.xml)";
@@ -71,10 +73,12 @@ export default function App() {
     fetchProfile();
 
     const q = collection(db, 'artifacts', appId, 'users', user.uid, 'history');
-    return onSnapshot(q, (snap) => {
+    const unsubscribe = onSnapshot(q, (snap) => {
       const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setPastAnalyses(docs.sort((a, b) => new Date(b.date) - new Date(a.date)));
-    });
+    }, (err) => console.error("History error", err));
+    
+    return () => unsubscribe();
   }, [user]);
 
   // 3. Завантаження бази товарів (XML)
@@ -118,7 +122,6 @@ export default function App() {
       const reader = new FileReader();
       reader.onloadend = () => {
         setBase64Image(reader.result.split(',')[1]);
-        // Автозаповнення даних з профілю перед переходом до анкети
         setUserData(prev => ({ ...prev, age: profileData.age, skinType: profileData.skinType || 'не знаю' }));
         setStep('questions');
       };
@@ -138,7 +141,17 @@ export default function App() {
     await saveProfile(); 
 
     const context = hillaryProducts.slice(0, 40).map(p => `ID:${p.id} | ${p.name} | ${p.description}`).join('\n');
-    const prompt = `Ти - косметолог Hillary. Проаналізуй фото. Підбери 3-4 ID зі списку. Каталог: ${context}`;
+    const systemPrompt = `Ти - косметолог Hillary. Проаналізуй фото та анкету. Підбери 3-4 ID зі списку товарів. 
+    Поверни ТІЛЬКИ чистий JSON у форматі:
+    {
+      "is_human_face": true,
+      "skin_condition": "опис стану шкіри",
+      "advice": "головна порада",
+      "suggested_ids": ["артикул1", "артикул2"],
+      "skin_type": "визначений тип"
+    }
+    Якщо на фото не обличчя, поверни {"is_human_face": false, "rejection_reason": "Причина"}. 
+    Спирайся на: ${context}`;
 
     try {
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`, {
@@ -146,13 +159,20 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: `Вік: ${userData.age}, Тип: ${userData.skinType}, Скарги: ${userData.concerns}.` }, { inlineData: { mimeType: "image/png", data: base64Image } }] }],
-          systemInstruction: { parts: [{ text: prompt }] },
+          systemInstruction: { parts: [{ text: systemPrompt }] },
           generationConfig: { responseMimeType: "application/json" }
         })
       });
 
       const data = await res.json();
-      const result = JSON.parse(data.candidates[0].content.parts[0].text);
+      if (!data.candidates?.[0]?.content?.parts?.[0]?.text) {
+        throw new Error("Немає відповіді від ШІ");
+      }
+
+      let rawText = data.candidates[0].content.parts[0].text;
+      // Очистка від Markdown-блоків, якщо ШІ їх додав
+      const cleanJson = rawText.replace(/```json|```/g, "").trim();
+      const result = JSON.parse(cleanJson);
 
       if (!result.is_human_face) {
         setError(result.rejection_reason || "Ми не впізнали обличчя на фото.");
@@ -161,7 +181,8 @@ export default function App() {
       }
 
       setAnalysis(result);
-      setRecommendations(hillaryProducts.filter(p => result.suggested_ids.includes(p.id)));
+      const matchedProducts = hillaryProducts.filter(p => result.suggested_ids.includes(p.id));
+      setRecommendations(matchedProducts);
 
       if (user) {
         await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'history'), {
@@ -173,6 +194,7 @@ export default function App() {
       }
       setStep('results');
     } catch (e) {
+      console.error(e);
       setError("Помилка аналізу. Спробуйте ще раз.");
       setStep('questions');
     } finally { setLoading(false); }
@@ -189,7 +211,7 @@ export default function App() {
           <span className="font-bold text-lg tracking-tight uppercase">HiLLARY AI</span>
         </div>
         {image && (step === 'questions' || step === 'results') && (
-            <div className="w-10 h-10 rounded-xl overflow-hidden border-2 border-blue-50 shadow-sm transition-all">
+            <div className="w-10 h-10 rounded-xl overflow-hidden border-2 border-blue-50 shadow-sm transition-all animate-in">
                 <img src={image} className="w-full h-full object-cover" />
             </div>
         )}
@@ -210,23 +232,23 @@ export default function App() {
         {step === 'upload' && (
           <div className="p-6 animate-in">
             <button onClick={() => setStep('welcome')} className="mb-6 flex items-center gap-2 text-slate-400 text-xs font-bold uppercase"><ArrowLeft className="w-4 h-4"/> Назад</button>
-            <h2 className="text-2xl font-black mb-2 uppercase tracking-tight">Крок 1: Фото</h2>
+            <h2 className="text-2xl font-black mb-2 uppercase tracking-tight text-slate-800">Крок 1: Фото</h2>
             <p className="text-slate-500 mb-8 text-sm font-medium">Система проаналізує стан шкіри по вашому селфі.</p>
             <div className="border-2 border-dashed border-slate-200 rounded-[3rem] p-16 flex flex-col items-center bg-slate-50/50 relative hover:bg-slate-100 transition-colors cursor-pointer">
               <input type="file" accept="image/*" onChange={handleCapture} className="absolute inset-0 opacity-0 cursor-pointer" />
               <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mb-4 shadow-sm">
                 <Camera className="text-blue-500 w-8 h-8" />
               </div>
-              <span className="font-bold text-slate-700">Натисни для фото</span>
+              <span className="font-bold text-slate-700 uppercase text-[10px] tracking-widest">Натисни для фото</span>
             </div>
-            {error && <div className="mt-6 p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-bold">{error}</div>}
+            {error && <div className="mt-6 p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-bold flex gap-2 items-center"><AlertCircle className="w-4 h-4 shrink-0"/>{error}</div>}
           </div>
         )}
 
         {step === 'questions' && (
           <div className="p-6 space-y-8 animate-in">
             <button onClick={() => setStep('upload')} className="mb-2 flex items-center gap-2 text-slate-400 text-xs font-bold uppercase"><ArrowLeft className="w-4 h-4"/> Назад до фото</button>
-            <h2 className="text-2xl font-black uppercase tracking-tight">Крок 2: Деталі</h2>
+            <h2 className="text-2xl font-black uppercase tracking-tight text-slate-800">Крок 2: Деталі</h2>
             <div className="space-y-6">
               <div className="space-y-2">
                 <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Вік</label>
@@ -244,7 +266,7 @@ export default function App() {
                 <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Що тебе турбує?</label>
                 <textarea value={userData.concerns} placeholder="Опиши свої скарги..." className="w-full p-4 rounded-2xl border border-slate-100 focus:border-blue-500 h-28 resize-none text-sm font-medium outline-none" onChange={(e) => setUserData({...userData, concerns: e.target.value})} />
               </div>
-              <button onClick={processAnalysis} disabled={!userData.age || loading} className="w-full bg-blue-600 text-white py-5 rounded-[2rem] font-bold shadow-xl active:scale-95 transition-all uppercase tracking-widest">Аналізувати</button>
+              <button onClick={processAnalysis} disabled={!userData.age || loading} className="w-full bg-blue-600 text-white py-5 rounded-[2rem] font-bold shadow-xl active:scale-95 transition-all uppercase tracking-widest disabled:opacity-50">Аналізувати шкіру</button>
             </div>
             {error && <div className="p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-bold">{error}</div>}
           </div>
@@ -268,7 +290,7 @@ export default function App() {
             
             <div className="px-6 -mt-10 relative z-10">
               <div className="bg-white rounded-[2.5rem] p-6 shadow-2xl border border-slate-50 mb-8">
-                <h3 className="font-bold text-lg mb-4 flex items-center gap-2 uppercase tracking-tight italic"><CheckCircle2 className="text-green-500 w-5 h-5"/> Висновок</h3>
+                <h3 className="font-bold text-lg mb-4 flex items-center gap-2 uppercase tracking-tight italic text-slate-800"><CheckCircle2 className="text-green-500 w-5 h-5"/> Результат аналізу</h3>
                 <p className="text-slate-700 text-sm mb-6 leading-relaxed font-medium">{analysis.skin_condition}</p>
                 <div className="bg-blue-50 p-5 rounded-3xl flex items-start gap-3 border-l-4 border-blue-600 shadow-sm">
                   <Lightbulb className="w-5 h-5 text-blue-600 mt-1 shrink-0" />
@@ -276,38 +298,50 @@ export default function App() {
                 </div>
               </div>
 
-              <h3 className="text-xl font-black text-slate-800 mb-6 px-2 uppercase tracking-tight">Твій догляд:</h3>
+              <h3 className="text-xl font-black text-slate-800 mb-6 px-2 uppercase tracking-tight">Ми рекомендуємо:</h3>
               <div className="space-y-4">
-                {recommendations.map(p => (
-                  <div key={p.id} className="bg-white border border-slate-100 p-5 rounded-[2.5rem] shadow-sm">
+                {recommendations.length > 0 ? recommendations.map(p => (
+                  <div key={p.id} className="bg-white border border-slate-100 p-5 rounded-[2.5rem] shadow-sm hover:shadow-md transition-all">
                     <div className="flex items-start justify-between mb-3">
                       <span className="text-[9px] font-black text-slate-300 uppercase tracking-widest">АРТ: {p.id}</span>
-                      <a href={p.link} target="_blank" rel="noopener noreferrer" className="text-blue-500 p-2 bg-blue-50 rounded-xl hover:bg-blue-600 transition-all"><ExternalLink className="w-4 h-4" /></a>
+                      <a href={p.link} target="_blank" rel="noopener noreferrer" className="text-blue-500 p-2 bg-blue-50 rounded-xl hover:bg-blue-600 hover:text-white transition-all"><ExternalLink className="w-4 h-4" /></a>
                     </div>
                     <h4 className="font-black text-slate-800 text-md leading-tight mb-2">{p.name}</h4>
-                    <p className="text-slate-500 text-xs leading-relaxed mb-4 font-medium">{p.description}</p>
+                    <p className="text-slate-500 text-xs leading-relaxed mb-4 font-medium line-clamp-3">{p.description}</p>
                     <div className="flex justify-between items-center">
                         <span className="text-xl font-black text-blue-600">{p.price} грн</span>
                         <a href={p.link} target="_blank" className="bg-blue-50 text-blue-600 text-[10px] font-black uppercase tracking-widest px-6 py-3 rounded-2xl active:bg-blue-600 active:text-white transition-all">Купити</a>
                     </div>
                   </div>
-                ))}
+                )) : <p className="text-center text-slate-400 py-4 font-bold">Товари підбираються...</p>}
               </div>
+              
+              <button onClick={() => setStep('welcome')} className="w-full mt-10 py-4 text-slate-300 font-bold uppercase tracking-[0.2em] text-[10px]">Завершити підбір</button>
             </div>
           </div>
         )}
 
         {step === 'history' && (
           <div className="p-6 animate-in">
-            <h2 className="text-2xl font-black mb-8 uppercase tracking-tight text-slate-800">Історія</h2>
-            {pastAnalyses.length === 0 ? <p className="text-center py-24 text-slate-300 font-bold uppercase text-xs tracking-widest">Історія порожня</p> : pastAnalyses.map(item => (
+            <h2 className="text-2xl font-black mb-8 uppercase tracking-tight text-slate-800">Історія аналізів</h2>
+            {pastAnalyses.length === 0 ? (
+              <div className="text-center py-24 text-slate-300">
+                <History className="w-12 h-12 mx-auto mb-4 opacity-20" />
+                <p className="font-bold uppercase text-xs tracking-widest">Тут поки порожньо</p>
+              </div>
+            ) : pastAnalyses.map(item => (
               <div key={item.id} className="p-4 rounded-[2rem] mb-4 flex items-center gap-4 bg-slate-50 shadow-sm border border-slate-100 transition-transform active:scale-95">
                 <img src={item.userPhoto} className="w-16 h-16 rounded-2xl object-cover shadow-sm" />
                 <div className="flex-1 min-w-0">
                   <p className="text-[9px] text-slate-400 font-bold">{new Date(item.date).toLocaleDateString()}</p>
-                  <h4 className="font-black text-xs truncate uppercase tracking-tighter text-slate-800">{item.analysis.skin_type || 'Тип'} шкіри</h4>
+                  <h4 className="font-black text-xs truncate uppercase tracking-tighter text-slate-800">{item.analysis?.skin_type || 'Тип'} шкіри</h4>
                 </div>
-                <button onClick={() => { setAnalysis(item.analysis); setImage(item.userPhoto); setRecommendations(hillaryProducts.filter(p => item.recommendationIds.includes(p.id))); setStep('results'); }} className="text-blue-600 text-[9px] font-black uppercase px-4 py-2 bg-white rounded-xl shadow-sm">Перегляд</button>
+                <button onClick={() => { 
+                  setAnalysis(item.analysis); 
+                  setImage(item.userPhoto); 
+                  setRecommendations(hillaryProducts.filter(p => item.recommendationIds.includes(p.id))); 
+                  setStep('results'); 
+                }} className="text-blue-600 text-[9px] font-black uppercase px-4 py-2 bg-white rounded-xl shadow-sm">Перегляд</button>
               </div>
             ))}
           </div>
@@ -322,7 +356,7 @@ export default function App() {
                 <input type="number" value={userData.age} className="w-full p-5 rounded-2xl border border-slate-100 focus:border-blue-500 outline-none font-bold text-lg" onChange={(e) => setUserData({...userData, age: e.target.value})} />
               </div>
               <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Тип шкіри</label>
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Мій Тип шкіри</label>
                 <div className="grid grid-cols-2 gap-2">
                   {['Суха', 'Жирна', 'Комбінована', 'Не знаю'].map(t => (
                     <button key={t} onClick={() => setUserData({...userData, skinType: t})} className={`p-4 rounded-2xl border-2 font-bold text-xs transition-all ${userData.skinType === t ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-slate-50 text-slate-400'}`}>{t}</button>
@@ -333,6 +367,7 @@ export default function App() {
                 {isProfileSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
                 {isProfileSaving ? "Зберігаємо..." : "Зберегти"}
               </button>
+              <p className="text-[10px] text-slate-400 text-center px-4 leading-relaxed font-medium">Ваші дані будуть автоматично підставлятися при кожному новому підборі.</p>
             </div>
           </div>
         )}
