@@ -104,13 +104,13 @@ export default function App() {
 
   const startAnalysis = async () => {
     if (!GEMINI_API_KEY || GEMINI_API_KEY.includes("ТУТ_ВАШ_КЛЮЧ")) {
-      setError("Помилка: Ви не вставили API Ключ Gemini у файл App.jsx (рядок 31)");
+      setError("Помилка: Ви не вставили API Ключ Gemini у файл App.jsx");
       return;
     }
     setLoading(true);
     setStep('analyzing');
     const catalog = hillaryProducts.slice(0, 40).map(p => `Арт: ${p.id}, Назва: ${p.name}, Дія: ${p.description}`).join('\n');
-    const prompt = `Ти - косметолог HiLLARY. Проаналізуй фото. Підбери 3-4 ID зі списку. Не пиши ID в тексті. Спирайся на: ${catalog}`;
+    const prompt = `Ти - косметолог HiLLARY. Проаналізуй фото. Підбери 3-4 ID зі списку. Не пиши ID в тексті. Спирайся на список Hillary.`;
     
     try {
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`, {
@@ -125,9 +125,8 @@ export default function App() {
 
       const data = await res.json();
 
-      // ПЕРЕВІРКА НАЯВНОСТІ РЕЗУЛЬТАТУ
       if (!data.candidates || data.candidates.length === 0) {
-        throw new Error(data.error?.message || "Gemini API не повернув результат. Перевірте ключ або баланс.");
+        throw new Error(data.error?.message || "Gemini API помилка. Перевірте ключ.");
       }
 
       const parsed = JSON.parse(data.candidates[0].content.parts[0].text);
@@ -151,7 +150,7 @@ export default function App() {
       setStep('results');
     } catch (e) {
       console.error(e);
-      setError("Помилка аналізу: " + e.message);
+      setError("Помилка: " + e.message);
       setStep('questions');
     } finally {
       setLoading(false);
@@ -171,7 +170,7 @@ export default function App() {
         {step === 'welcome' && (
           <div className="p-8 text-center mt-20">
             <Sparkles className="w-16 h-16 text-blue-500 mx-auto mb-6" />
-            <h1 className="text-2xl font-bold mb-4">Розумний догляд</h1>
+            <h1 className="text-2xl font-bold mb-4 text-slate-800">Розумний догляд</h1>
             <p className="text-slate-500 mb-10 text-sm">ШІ підбере догляд Hillary, проаналізувавши ваше фото та XML сайту.</p>
             <button disabled={productsLoading} onClick={() => setStep('upload')} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold transition-all active:scale-95">{productsLoading ? "Завантаження..." : "Почати"}</button>
           </div>
@@ -183,7 +182,7 @@ export default function App() {
               <input type="file" accept="image/*" onChange={handlePhoto} className="hidden" id="cam" />
               <label htmlFor="cam" className="cursor-pointer flex flex-col items-center">
                 <Camera className="text-blue-500 w-10 h-10 mb-4" />
-                <span className="font-bold">Зробити селфі</span>
+                <span className="font-bold text-slate-700">Зробити селфі</span>
               </label>
             </div>
             {error && <div className="mt-4 p-4 bg-red-50 text-red-600 rounded-xl text-xs font-bold">{error}</div>}
@@ -217,7 +216,7 @@ export default function App() {
               {recommendations.map(p => (
                 <div key={p.id} className="border p-4 rounded-2xl flex justify-between items-center bg-white shadow-sm">
                   <div className="flex-1 pr-4">
-                    <p className="text-[10px] text-slate-400 font-bold tracking-widest uppercase">АРТ: {p.id}</p>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase">АРТ: {p.id}</p>
                     <h4 className="font-bold text-sm leading-tight mb-1">{p.name}</h4>
                     <p className="font-bold text-blue-600">{p.price} грн</p>
                   </div>
@@ -231,7 +230,7 @@ export default function App() {
         {step === 'history' && (
           <div className="p-6 animate-in slide-in-from-left-5">
             <button onClick={() => setStep('welcome')} className="mb-6 flex items-center gap-2 text-slate-400 text-xs font-bold uppercase"><ArrowLeft className="w-4 h-4"/> Назад</button>
-            <h2 className="text-xl font-bold mb-6">Історія</h2>
+            <h2 className="text-xl font-bold mb-6 text-slate-800">Історія</h2>
             {pastAnalyses.length === 0 ? <p className="text-center text-slate-300 py-10 font-bold uppercase text-xs">Поки порожньо</p> : pastAnalyses.map(item => (
               <div key={item.id} className="border p-3 rounded-2xl mb-3 flex items-center gap-3 bg-white shadow-sm">
                 <img src={item.userPhoto} className="w-12 h-12 rounded-lg object-cover" />
