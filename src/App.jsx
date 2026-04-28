@@ -46,7 +46,8 @@ export default function App() {
   const [hillaryProducts, setHillaryProducts] = useState([]);
   const [isProfileSaving, setIsProfileSaving] = useState(false);
   
-  const apiKey = "AIzaSyC6zqfwIA1yEpA50rq4-ownpB0bwImusY8"; 
+  // ВАЖЛИВО: Залишаємо порожнім рядком, ключ підставиться автоматично
+  const apiKey = ""; 
 
   // 1. Ініціалізація та Авторизація
   useEffect(() => {
@@ -208,13 +209,16 @@ export default function App() {
         "is_human_face": true,
         "skin_condition": "детальний опис",
         "advice": "головна порада",
-        "suggested_ids": ["id1", "id2"],
+        "suggested_ids": ["артикул1", "артикул2"],
         "skin_type": "тип"
       }
       ТОВАРИ: ${productContext}`;
 
-      // 2. Запит до Gemini
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+      // 2. Запит до Gemini (використання v1beta та gemini-2.5-flash-preview-09-2025)
+      const modelName = "gemini-2.5-flash-preview-09-2025";
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -226,7 +230,10 @@ export default function App() {
             ]
           }],
           systemInstruction: { parts: [{ text: systemPrompt }] },
-          generationConfig: { responseMimeType: "application/json" }
+          generationConfig: { 
+            responseMimeType: "application/json",
+            temperature: 0.7
+          }
         })
       });
 
@@ -244,7 +251,6 @@ export default function App() {
       
       if (!aiText) throw new Error("ШІ не повернув відповіді.");
 
-      // Покращене вилучення JSON
       const jsonMatch = aiText.match(/\{[\s\S]*\}/);
       const cleanJson = jsonMatch ? jsonMatch[0] : aiText.replace(/```json|```/g, "").trim();
       const parsedResult = JSON.parse(cleanJson);
@@ -369,10 +375,13 @@ export default function App() {
                </div>
                <Sparkles className="absolute -top-2 -right-2 w-6 h-6 text-yellow-400 animate-bounce" />
             </div>
+            
             <h3 className="text-xl font-bold uppercase tracking-tight dark:text-white mb-2">{loadingStatus}</h3>
+            
             <div className="w-full max-w-[240px] h-2 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden mt-6 shadow-inner">
               <div className="h-full bg-blue-600 transition-all duration-700 ease-out shadow-[0_0_10px_rgba(37,99,235,0.5)]" style={{ width: `${loadingProgress}%` }}></div>
             </div>
+            
             <p className="text-slate-400 dark:text-slate-500 text-xs mt-6 font-medium italic px-4 leading-relaxed">
               Майже готово! ШІ Hillary ретельно підбирає засоби, що підійдуть саме вашій шкірі.
             </p>
