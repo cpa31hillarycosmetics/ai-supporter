@@ -20,10 +20,19 @@ const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'hillary-skin-care-app';
 
 // --- ДЖЕРЕЛО ДАНИХ ТОВАРІВ ---
-const XML_URL = "https://hillary.ua/content/export/019d094ee103debf52c00b6828d5c1b3.xml";
+// Порада: Якщо ви переведете файл у JSON та викладете на GitHub Gist, CORS помилок не буде.
+const PRODUCT_DATA_URL = "https://hillary.ua/content/export/019d094ee103debf52c00b6828d5c1b3.xml";
 const PROXY_URLS = [
   "https://corsproxy.io/?",
-  "https://api.allorigins.win/raw?url="
+  "https://api.allorigins.win/raw?url=",
+  "https://thingproxy.freeboard.io/fetch/"
+];
+
+// Резервний список товарів на випадок збою мережі
+const FALLBACK_PRODUCTS = [
+  { id: "101", name: "Очищувальна пінка для вмивання", description: "М'яко очищує шкіру, не пересушуючи її. Підходить для всіх типів.", link: "https://hillary.ua", price: "249" },
+  { id: "102", name: "Гіалуронова сироватка Smart", description: "Інтенсивно зволожує та розгладжує дрібні зморшки.", link: "https://hillary.ua", price: "389" },
+  { id: "103", name: "Крем з вітаміном С", description: "Вирівнює тон шкіри та надає природного сяйва.", link: "https://hillary.ua", price: "450" }
 ];
 
 export default function App() {
@@ -42,7 +51,6 @@ export default function App() {
   const [hillaryProducts, setHillaryProducts] = useState([]);
   const [isProfileSaving, setIsProfileSaving] = useState(false);
   
-  // Ваш персональний ключ Gemini
   const apiKey = "AIzaSyC6zqfwIA1yEpA50rq4-ownpB0bwImusY8"; 
 
   // 1. Ініціалізація Telegram та Авторизація
@@ -103,17 +111,30 @@ export default function App() {
     return () => unsubscribe();
   }, [user]);
 
-  // Спроба завантаження XML з декількох проксі
+  // Універсальна функція завантаження (підтримує XML та JSON)
   const fetchProducts = async () => {
+    setLoadingProgress(20);
     for (const proxy of PROXY_URLS) {
       try {
-        const response = await fetch(proxy + encodeURIComponent(XML_URL));
+        const response = await fetch(proxy + encodeURIComponent(PRODUCT_DATA_URL));
         if (!response.ok) continue;
-        const xmlText = await response.text();
-        const parser = new DOMParser();
-        const xmlDoc = parser.parseFromString(xmlText, "text/xml");
-        const offers = xmlDoc.getElementsByTagName("offer");
         
+        const contentType = response.headers.get("content-type");
+        const rawData = await response.text();
+
+        // Перевірка, чи це JSON
+        if (PRODUCT_DATA_URL.endsWith('.json') || (contentType && contentType.includes('application/json'))) {
+          const json = JSON.parse(rawData);
+          // Адаптуйте структуру під ваш JSON
+          const items = Array.isArray(json) ? json : (json.products || json.offers || []);
+          setHillaryProducts(items);
+          return items;
+        } 
+        
+        // Обробка XML
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(rawData, "text/xml");
+        const offers = xmlDoc.getElementsByTagName("offer");
         if (offers.length === 0) continue;
 
         const parsedData = Array.from(offers).map(offer => ({
@@ -130,7 +151,11 @@ export default function App() {
         console.warn(`Proxy ${proxy} failed, trying next...`);
       }
     }
-    return [];
+    
+    // Якщо все провалилося — використовуємо Fallback
+    console.warn("Using fallback product list due to connection issues.");
+    setHillaryProducts(FALLBACK_PRODUCTS);
+    return FALLBACK_PRODUCTS;
   };
 
   const saveProfile = async (manual = false) => {
@@ -179,18 +204,13 @@ export default function App() {
     saveProfile().catch(console.error);
 
     try {
-      // 1. Завантаження бази Hillary
-      setLoadingStatus('Підвантажуємо базу Hillary Cosmetics...');
-      setLoadingProgress(30);
+      // 1. Завантаження бази Hillary (з підтримкою Fallback)
+      setLoadingStatus('Отримуємо каталог товарів...');
       let products = hillaryProducts;
       if (products.length === 0) {
         products = await fetchProducts();
       }
       
-      if (products.length === 0) {
-        throw new Error("Не вдалося завантажити каталог товарів.");
-      }
-
       setLoadingProgress(50);
       setLoadingStatus('Штучний інтелект вивчає ваше фото...');
 
@@ -212,7 +232,6 @@ export default function App() {
       }
       СПИСОК ТОВАРІВ: ${productContext}`;
 
-      // 2. Запит до Gemini
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -232,17 +251,11 @@ export default function App() {
       setLoadingProgress(80);
       setLoadingStatus('Підбираємо персональний догляд...');
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error?.message || "API Gemini недоступне");
-      }
+      if (!response.ok) throw new Error("Сервіс аналізу тимчасово недоступний.");
 
       const data = await response.json();
       const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text;
       
-      if (!aiText) throw new Error("ШІ не надав текстової відповіді.");
-
-      // Покращене вилучення JSON
       const jsonMatch = aiText.match(/\{[\s\S]*\}/);
       const cleanJson = jsonMatch ? jsonMatch[0] : aiText;
       const parsedResult = JSON.parse(cleanJson);
@@ -274,8 +287,8 @@ export default function App() {
       setTimeout(() => setStep('results'), 500);
 
     } catch (err) {
-      console.error("Critical analysis error:", err);
-      setError(`Помилка: ${err.message || "Спробуйте оновити сторінку."}`);
+      console.error("Critical error:", err);
+      setError(`Помилка: ${err.message || "Спробуйте ще раз."}`);
       setStep('questions');
     } finally {
       setLoading(false);
@@ -284,7 +297,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-100 max-w-md mx-auto shadow-2xl flex flex-col overflow-hidden relative pb-20 transition-colors duration-300">
-      {/* Шапка */}
       <header className="sticky top-0 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md z-50 px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2 cursor-pointer" onClick={() => setStep('welcome')}>
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center -rotate-2">
@@ -305,12 +317,7 @@ export default function App() {
             </div>
             <h1 className="text-3xl font-black mb-4 tracking-tight leading-tight uppercase text-slate-800 dark:text-white">Персональний догляд</h1>
             <p className="text-slate-500 dark:text-slate-400 mb-12 leading-relaxed text-sm font-medium px-4">ШІ Hillary проаналізує вашу шкіру за фото та підбере індивідуальний догляд.</p>
-            <button 
-              onClick={() => setStep('upload')} 
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-[2rem] font-bold text-lg shadow-xl shadow-blue-100 dark:shadow-none active:scale-95 transition-all uppercase tracking-wider"
-            >
-              Почати аналіз
-            </button>
+            <button onClick={() => setStep('upload')} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-[2rem] font-bold text-lg shadow-xl active:scale-95 transition-all uppercase tracking-wider">Почати аналіз</button>
           </div>
         )}
 
@@ -337,13 +344,7 @@ export default function App() {
             <div className="space-y-6">
               <div>
                 <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 ml-1 block mb-2">Ваш вік</label>
-                <input 
-                  type="number" 
-                  value={userData.age}
-                  placeholder="25"
-                  className="w-full p-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 focus:border-blue-500 outline-none font-bold text-lg text-slate-900 dark:text-white"
-                  onChange={(e) => setUserData({...userData, age: e.target.value})}
-                />
+                <input type="number" value={userData.age} placeholder="25" className="w-full p-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 focus:border-blue-500 outline-none font-bold text-lg text-slate-900 dark:text-white" onChange={(e) => setUserData({...userData, age: e.target.value})} />
               </div>
               <div>
                 <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 ml-1 block mb-2">Ваш тип шкіри</label>
@@ -355,20 +356,9 @@ export default function App() {
               </div>
               <div>
                 <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 ml-1 block mb-2">Що вас турбує?</label>
-                <textarea 
-                  value={userData.concerns}
-                  placeholder="Наприклад: висипи, сухість, зморшки..."
-                  className="w-full p-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 focus:border-blue-500 outline-none h-28 resize-none text-sm font-medium leading-relaxed text-slate-900 dark:text-white"
-                  onChange={(e) => setUserData({...userData, concerns: e.target.value})}
-                />
+                <textarea value={userData.concerns} placeholder="Наприклад: висипи, сухість, зморшки..." className="w-full p-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 focus:border-blue-500 outline-none h-28 resize-none text-sm font-medium leading-relaxed text-slate-900 dark:text-white" onChange={(e) => setUserData({...userData, concerns: e.target.value})} />
               </div>
-              <button 
-                onClick={runAIAnalysis} 
-                disabled={!userData.age || loading} 
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-[2rem] font-bold shadow-xl active:scale-95 transition-all uppercase tracking-widest disabled:opacity-50"
-              >
-                Аналізувати стан шкіри
-              </button>
+              <button onClick={runAIAnalysis} disabled={!userData.age || loading} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-[2rem] font-bold shadow-xl active:scale-95 transition-all uppercase tracking-widest disabled:opacity-50">Аналізувати стан шкіри</button>
             </div>
             {error && <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-2xl text-xs font-bold flex gap-2"><AlertCircle className="w-4 h-4 shrink-0"/>{error}</div>}
           </div>
@@ -381,36 +371,25 @@ export default function App() {
                   <Loader2 className="w-10 h-10 text-blue-600 animate-spin"/>
                </div>
             </div>
-            
             <h3 className="text-xl font-bold uppercase tracking-tight dark:text-white mb-2">{loadingStatus}</h3>
-            
             <div className="w-full max-w-[200px] h-1.5 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden mt-6">
-              <div 
-                className="h-full bg-blue-600 transition-all duration-500 ease-out" 
-                style={{ width: `${loadingProgress}%` }}
-              ></div>
+              <div className="h-full bg-blue-600 transition-all duration-500 ease-out" style={{ width: `${loadingProgress}%` }}></div>
             </div>
-            
-            <p className="text-slate-400 dark:text-slate-500 text-xs mt-6 font-medium italic px-4 leading-relaxed">
-              Це може зайняти до 15 секунд. Наш ШІ ретельно перевіряє кожну пору для найкращого результату.
-            </p>
+            <p className="text-slate-400 dark:text-slate-500 text-xs mt-6 font-medium italic px-4 leading-relaxed">Це може зайняти до 15 секунд. ШІ ретельно перевіряє стан кожної пори.</p>
           </div>
         )}
 
         {step === 'results' && analysis && (
           <div className="pb-12 animate-in fade-in duration-1000">
-            <div className="h-60 relative shadow-inner">
+            <div className="h-60 relative">
               <img src={image} className="w-full h-full object-cover" />
               <div className="absolute inset-0 bg-gradient-to-t from-slate-50 dark:from-slate-950 via-transparent"></div>
               <button onClick={() => setStep('upload')} className="absolute top-4 right-4 bg-white/80 dark:bg-slate-900/80 p-3 rounded-2xl shadow-lg backdrop-blur-sm"><RefreshCcw className="w-5 h-5 text-slate-700 dark:text-slate-300" /></button>
             </div>
-            
             <div className="px-6 -mt-12 relative z-10">
               <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-6 shadow-2xl border border-slate-50 dark:border-slate-800 mb-8">
                 <div className="flex items-center gap-2 mb-4">
-                   <div className="p-2 bg-green-50 dark:bg-green-900/20 rounded-lg">
-                      <CheckCircle2 className="text-green-500 w-5 h-5"/>
-                   </div>
+                   <div className="p-2 bg-green-50 dark:bg-green-900/20 rounded-lg"><CheckCircle2 className="text-green-500 w-5 h-5"/></div>
                    <h3 className="font-bold text-lg uppercase tracking-tight italic text-slate-800 dark:text-white">Результат</h3>
                 </div>
                 <p className="text-slate-700 dark:text-slate-300 text-sm mb-6 leading-relaxed font-medium">{analysis.skin_condition}</p>
@@ -419,9 +398,7 @@ export default function App() {
                   <p className="text-blue-900 dark:text-blue-200 text-sm italic font-bold leading-relaxed">"{analysis.advice}"</p>
                 </div>
               </div>
-
               <h3 className="text-xl font-black text-slate-800 dark:text-white mb-6 px-2 uppercase tracking-tight">Ваша програма догляду:</h3>
-              
               <div className="space-y-4">
                 {recommendations.map(item => (
                   <div key={item.id} className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-5 rounded-[2.5rem] shadow-sm hover:shadow-md transition-all group">
@@ -433,26 +410,23 @@ export default function App() {
                     <p className="text-slate-500 dark:text-slate-400 text-xs leading-relaxed mb-4 font-medium line-clamp-3">{item.description}</p>
                     <div className="flex justify-between items-center border-t border-slate-50 dark:border-slate-800 pt-4">
                        <span className="font-black text-blue-600 dark:text-blue-400 text-xl">{item.price} грн</span>
-                       <a href={item.link} target="_blank" rel="noopener noreferrer" className="bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-black uppercase tracking-widest px-7 py-4 rounded-2xl transition-all shadow-lg shadow-blue-50 dark:shadow-none">Купити</a>
+                       <a href={item.link} target="_blank" rel="noopener noreferrer" className="bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-black uppercase tracking-widest px-7 py-4 rounded-2xl transition-all shadow-lg">Купити</a>
                     </div>
                   </div>
                 ))}
               </div>
-              
-              <button onClick={() => setStep('welcome')} className="w-full mt-12 py-5 text-slate-300 dark:text-slate-700 font-black uppercase tracking-[0.3em] text-[10px] hover:text-blue-600 transition-colors">Розпочати новий аналіз</button>
+              <button onClick={() => setStep('welcome')} className="w-full mt-12 py-5 text-slate-300 dark:text-slate-700 font-black uppercase tracking-widest text-[10px]">Розпочати новий аналіз</button>
             </div>
           </div>
         )}
 
         {step === 'history' && (
           <div className="p-6 animate-in slide-in-from-left-4">
-            <button onClick={() => setStep('welcome')} className="mb-6 flex items-center gap-2 text-slate-400 text-[10px] font-black uppercase tracking-widest transition-colors"><ArrowLeft className="w-4 h-4"/> Назад</button>
+            <button onClick={() => setStep('welcome')} className="mb-6 flex items-center gap-2 text-slate-400 text-[10px] font-black uppercase tracking-widest"><ArrowLeft className="w-4 h-4"/> Назад</button>
             <h2 className="text-2xl font-black mb-8 text-slate-800 dark:text-white uppercase tracking-tight">Ваша історія</h2>
             <div className="space-y-4 pb-12">
               {pastAnalyses.length === 0 ? (
-                <div className="text-center py-24 text-slate-300 dark:text-slate-800 font-bold italic text-xs leading-relaxed uppercase tracking-widest">
-                  У вас поки немає збережених аналізів
-                </div>
+                <div className="text-center py-24 text-slate-300 dark:text-slate-800 font-bold italic text-xs uppercase tracking-widest">Історія порожня</div>
               ) : (
                 pastAnalyses.map(item => (
                   <div key={item.id} className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-4 rounded-[2rem] shadow-sm flex items-center gap-4 transition-transform active:scale-95 cursor-pointer" onClick={() => { 
@@ -483,13 +457,7 @@ export default function App() {
             <div className="space-y-6">
               <div>
                 <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 ml-1 block mb-2">Ваш вік</label>
-                <input 
-                  type="number" 
-                  value={userData.age}
-                  placeholder="25"
-                  className="w-full p-5 rounded-2xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 focus:border-blue-500 outline-none font-bold text-lg text-slate-900 dark:text-white shadow-inner"
-                  onChange={(e) => setUserData({...userData, age: e.target.value})}
-                />
+                <input type="number" value={userData.age} placeholder="25" className="w-full p-5 rounded-2xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 focus:border-blue-500 outline-none font-bold text-lg text-slate-900 dark:text-white shadow-inner" onChange={(e) => setUserData({...userData, age: e.target.value})} />
               </div>
               <div>
                 <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 ml-1 block mb-2">Ваш тип шкіри</label>
@@ -499,7 +467,7 @@ export default function App() {
                   ))}
                 </div>
               </div>
-              <button onClick={() => saveProfile(true)} disabled={isProfileSaving} className="w-full bg-slate-900 dark:bg-blue-600 text-white py-5 rounded-[2rem] font-bold shadow-lg flex items-center justify-center gap-3 transition-transform active:scale-95 uppercase tracking-widest">
+              <button onClick={() => saveProfile(true)} disabled={isProfileSaving} className="w-full bg-slate-900 dark:bg-blue-600 text-white py-5 rounded-[2rem] font-bold shadow-lg flex items-center justify-center gap-3 active:scale-95 transition-all uppercase tracking-widest">
                 {isProfileSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
                 {isProfileSaving ? "Зберігаємо..." : "Зберегти налаштування"}
               </button>
@@ -508,19 +476,15 @@ export default function App() {
         )}
       </main>
 
-      {/* Навігація */}
       <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/95 dark:bg-slate-950/95 backdrop-blur-md border-t border-slate-100 dark:border-slate-800 h-20 px-8 flex items-center justify-between z-50">
         <button onClick={() => setStep('welcome')} className={`flex flex-col items-center gap-1 transition-all ${['welcome', 'upload', 'questions', 'analyzing', 'results'].includes(step) ? 'text-blue-600 dark:text-blue-400 scale-110' : 'text-slate-300 dark:text-slate-700'}`}>
-          <Home className="w-6 h-6" />
-          <span className="text-[9px] font-black uppercase tracking-tighter">Дім</span>
+          <Home className="w-6 h-6" /><span className="text-[9px] font-black uppercase tracking-tighter">Дім</span>
         </button>
         <button onClick={() => setStep('history')} className={`flex flex-col items-center gap-1 transition-all ${step === 'history' ? 'text-blue-600 dark:text-blue-400 scale-110' : 'text-slate-300 dark:text-slate-700'}`}>
-          <History className="w-6 h-6" />
-          <span className="text-[9px] font-black uppercase tracking-tighter">Історія</span>
+          <History className="w-6 h-6" /><span className="text-[9px] font-black uppercase tracking-tighter">Історія</span>
         </button>
         <button onClick={() => setStep('profile')} className={`flex flex-col items-center gap-1 transition-all ${step === 'profile' ? 'text-blue-600 dark:text-blue-400 scale-110' : 'text-slate-300 dark:text-slate-700'}`}>
-          <User className="w-6 h-6" />
-          <span className="text-[9px] font-black uppercase tracking-tighter">Профіль</span>
+          <User className="w-6 h-6" /><span className="text-[9px] font-black uppercase tracking-tighter">Профіль</span>
         </button>
       </nav>
     </div>
