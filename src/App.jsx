@@ -21,7 +21,10 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'hillary-skin-care-ap
 
 // --- ДЖЕРЕЛО ДАНИХ ТОВАРІВ ---
 const XML_URL = "https://hillary.ua/content/export/019d094ee103debf52c00b6828d5c1b3.xml";
-const PROXY_URL = "https://corsproxy.io/?"; 
+const PROXY_URLS = [
+  "https://corsproxy.io/?",
+  "https://api.allorigins.win/raw?url="
+];
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -100,30 +103,34 @@ export default function App() {
     return () => unsubscribe();
   }, [user]);
 
-  // Функція для завантаження XML (тепер викликається при аналізі)
+  // Спроба завантаження XML з декількох проксі
   const fetchProducts = async () => {
-    try {
-      const response = await fetch(PROXY_URL + encodeURIComponent(XML_URL));
-      if (!response.ok) throw new Error("Помилка завантаження XML");
-      const xmlText = await response.text();
-      const parser = new DOMParser();
-      const xmlDoc = parser.parseFromString(xmlText, "text/xml");
-      const offers = xmlDoc.getElementsByTagName("offer");
-      
-      const parsedData = Array.from(offers).map(offer => ({
-        id: offer.querySelector('param[name="Артикул"]')?.textContent || offer.getAttribute('id'),
-        name: offer.getElementsByTagName("name")[0]?.textContent || "Товар",
-        description: (offer.getElementsByTagName("description")[0]?.textContent || "").replace(/<\/?[^>]+(>|$)/g, "").trim().substring(0, 300),
-        link: offer.getElementsByTagName("url")[0]?.textContent || "https://hillary.ua",
-        price: offer.getElementsByTagName("price")[0]?.textContent || "0",
-      })).filter(p => p.id);
+    for (const proxy of PROXY_URLS) {
+      try {
+        const response = await fetch(proxy + encodeURIComponent(XML_URL));
+        if (!response.ok) continue;
+        const xmlText = await response.text();
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+        const offers = xmlDoc.getElementsByTagName("offer");
+        
+        if (offers.length === 0) continue;
 
-      setHillaryProducts(parsedData);
-      return parsedData;
-    } catch (err) {
-      console.error("Catalog error:", err);
-      return [];
+        const parsedData = Array.from(offers).map(offer => ({
+          id: offer.querySelector('param[name="Артикул"]')?.textContent || offer.getAttribute('id'),
+          name: offer.getElementsByTagName("name")[0]?.textContent || "Товар",
+          description: (offer.getElementsByTagName("description")[0]?.textContent || "").replace(/<\/?[^>]+(>|$)/g, "").trim().substring(0, 300),
+          link: offer.getElementsByTagName("url")[0]?.textContent || "https://hillary.ua",
+          price: offer.getElementsByTagName("price")[0]?.textContent || "0",
+        })).filter(p => p.id);
+
+        setHillaryProducts(parsedData);
+        return parsedData;
+      } catch (err) {
+        console.warn(`Proxy ${proxy} failed, trying next...`);
+      }
     }
+    return [];
   };
 
   const saveProfile = async (manual = false) => {
@@ -225,11 +232,20 @@ export default function App() {
       setLoadingProgress(80);
       setLoadingStatus('Підбираємо персональний догляд...');
 
-      if (!response.ok) throw new Error("API Gemini недоступне");
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error?.message || "API Gemini недоступне");
+      }
 
       const data = await response.json();
       const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      const parsedResult = JSON.parse(aiText.replace(/```json|```/g, "").trim());
+      
+      if (!aiText) throw new Error("ШІ не надав текстової відповіді.");
+
+      // Покращене вилучення JSON
+      const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+      const cleanJson = jsonMatch ? jsonMatch[0] : aiText;
+      const parsedResult = JSON.parse(cleanJson);
       
       if (!parsedResult.is_human_face) {
         setError(parsedResult.rejection_reason || "Обличчя не знайдено.");
@@ -258,8 +274,8 @@ export default function App() {
       setTimeout(() => setStep('results'), 500);
 
     } catch (err) {
-      console.error(err);
-      setError("Помилка під час аналізу. Спробуйте оновити сторінку.");
+      console.error("Critical analysis error:", err);
+      setError(`Помилка: ${err.message || "Спробуйте оновити сторінку."}`);
       setStep('questions');
     } finally {
       setLoading(false);
