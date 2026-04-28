@@ -33,7 +33,8 @@ export default function App() {
   const [recommendations, setRecommendations] = useState([]);
   const [pastAnalyses, setPastAnalyses] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [productsLoading, setProductsLoading] = useState(true);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [loadingStatus, setLoadingStatus] = useState('');
   const [error, setError] = useState(null);
   const [hillaryProducts, setHillaryProducts] = useState([]);
   const [isProfileSaving, setIsProfileSaving] = useState(false);
@@ -71,48 +72,7 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 2. Завантаження бази товарів та профілю
-  useEffect(() => {
-    const fetchProducts = async () => {
-      try {
-        setProductsLoading(true);
-        const response = await fetch(PROXY_URL + encodeURIComponent(XML_URL));
-        if (!response.ok) throw new Error("Помилка завантаження XML через проксі");
-        
-        const xmlText = await response.text();
-        const parser = new DOMParser();
-        const xmlDoc = parser.parseFromString(xmlText, "text/xml");
-        const offers = xmlDoc.getElementsByTagName("offer");
-        
-        if (offers.length === 0) throw new Error("XML порожній або має невірний формат");
-
-        const parsedData = Array.from(offers).map(offer => {
-          // Шукаємо артикул у параметрах або ID
-          const sku = offer.querySelector('param[name="Артикул"]')?.textContent || 
-                      offer.getAttribute('id') || 
-                      offer.querySelector('vendorCode')?.textContent;
-                      
-          return {
-            id: sku,
-            name: offer.getElementsByTagName("name")[0]?.textContent || "Товар без назви",
-            description: (offer.getElementsByTagName("description")[0]?.textContent || "").replace(/<\/?[^>]+(>|$)/g, "").trim().substring(0, 300),
-            link: offer.getElementsByTagName("url")[0]?.textContent || "https://hillary.ua",
-            price: offer.getElementsByTagName("price")[0]?.textContent || "0",
-          };
-        }).filter(p => p.id); // Прибираємо товари без ID
-
-        setHillaryProducts(parsedData);
-        setError(null);
-      } catch (err) {
-        console.error("Catalog loading error:", err);
-        setError("Виникла проблема з завантаженням товарів. Спробуйте оновити сторінку.");
-      } finally {
-        setProductsLoading(false);
-      }
-    };
-    fetchProducts();
-  }, []);
-
+  // 2. Завантаження профілю та історії
   useEffect(() => {
     if (!user) return;
     
@@ -139,6 +99,32 @@ export default function App() {
     
     return () => unsubscribe();
   }, [user]);
+
+  // Функція для завантаження XML (тепер викликається при аналізі)
+  const fetchProducts = async () => {
+    try {
+      const response = await fetch(PROXY_URL + encodeURIComponent(XML_URL));
+      if (!response.ok) throw new Error("Помилка завантаження XML");
+      const xmlText = await response.text();
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+      const offers = xmlDoc.getElementsByTagName("offer");
+      
+      const parsedData = Array.from(offers).map(offer => ({
+        id: offer.querySelector('param[name="Артикул"]')?.textContent || offer.getAttribute('id'),
+        name: offer.getElementsByTagName("name")[0]?.textContent || "Товар",
+        description: (offer.getElementsByTagName("description")[0]?.textContent || "").replace(/<\/?[^>]+(>|$)/g, "").trim().substring(0, 300),
+        link: offer.getElementsByTagName("url")[0]?.textContent || "https://hillary.ua",
+        price: offer.getElementsByTagName("price")[0]?.textContent || "0",
+      })).filter(p => p.id);
+
+      setHillaryProducts(parsedData);
+      return parsedData;
+    } catch (err) {
+      console.error("Catalog error:", err);
+      return [];
+    }
+  };
 
   const saveProfile = async (manual = false) => {
     if (!user) return;
@@ -171,117 +157,113 @@ export default function App() {
   };
 
   const runAIAnalysis = async () => {
-    // Фінальні перевірки перед запуском
-    if (hillaryProducts.length === 0) {
-      setError("Каталог Hillary ще не завантажився. Будь ласка, зачекайте 2-3 секунди.");
-      return;
-    }
     if (!base64Image) {
-      setError("Ми втратили ваше фото. Будь ласка, завантажте його знову.");
+      setError("Будь ласка, завантажте фото.");
       setStep('upload');
-      return;
-    }
-    if (!userData.age) {
-      setError("Будь ласка, вкажіть ваш вік.");
       return;
     }
 
     setLoading(true);
+    setLoadingProgress(10);
+    setLoadingStatus('Ініціалізація аналізу...');
     setStep('analyzing');
     setError(null);
     
-    // Зберігаємо профіль у фоні
     saveProfile().catch(console.error);
 
-    // Беремо частину товарів для промпту (ліміт Gemini)
-    const productContext = hillaryProducts.slice(0, 45).map(p => 
-      `АРТ: ${p.id} | ${p.name} | ${p.description}`
-    ).join('\n---\n');
-
-    const systemPrompt = `Ти - професійний ШІ-косметолог бренду HiLLARY Cosmetics.
-    Твоє завдання:
-    1. Перевір, чи на фото обличчя. Якщо ні - поверни is_human_face: false.
-    2. Проаналізуй стан шкіри (пори, зморшки, висипи, тон).
-    3. Підбери 3 найактуальніші АРТИКУЛИ (ID) товарів HiLLARY з наданого списку.
-    
-    Обов'язково поверни ТІЛЬКИ чистий JSON-об'єкт:
-    {
-      "is_human_face": true,
-      "skin_condition": "детальний опис стану шкіри",
-      "advice": "головна порада щодо догляду",
-      "suggested_ids": ["артикул1", "артикул2", "артикул3"],
-      "skin_type": "тип шкіри користувача"
-    }
-    
-    СПИСОК ТОВАРІВ:
-    ${productContext}`;
-
-    const performRequest = async (retryCount = 0) => {
-      try {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{
-              role: "user",
-              parts: [
-                { text: `Користувач: вік ${userData.age}, тип ${userData.skinType}, скарги: ${userData.concerns || 'немає'}. Проаналізуй фото та підбери догляд.` },
-                { inlineData: { mimeType: "image/png", data: base64Image } }
-              ]
-            }],
-            systemInstruction: { parts: [{ text: systemPrompt }] },
-            generationConfig: { responseMimeType: "application/json" }
-          })
-        });
-
-        if (!response.ok) {
-          if (retryCount < 3) {
-            const delay = Math.pow(2, retryCount) * 1500;
-            await new Promise(r => setTimeout(r, delay));
-            return performRequest(retryCount + 1);
-          }
-          throw new Error("API Gemini недоступне");
-        }
-
-        const data = await response.json();
-        let aiText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!aiText) throw new Error("ШІ не надав відповіді");
-        
-        // Видалення Markdown форматування, якщо воно є
-        const cleanJson = aiText.replace(/```json|```/g, "").trim();
-        const parsedResult = JSON.parse(cleanJson);
-        
-        if (!parsedResult.is_human_face) {
-          setError(parsedResult.rejection_reason || "На фото не знайдено обличчя. Спробуйте зробити селфі при кращому освітленні.");
-          setStep('upload');
-          setLoading(false);
-          return;
-        }
-
-        setAnalysis(parsedResult);
-        // Співставлення ID товарів з нашої бази
-        const matchedItems = hillaryProducts.filter(p => parsedResult.suggested_ids.includes(p.id));
-        setRecommendations(matchedItems.length > 0 ? matchedItems : hillaryProducts.slice(0, 3));
-        
-        if (user) {
-          await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'history'), {
-            date: new Date().toISOString(),
-            analysis: parsedResult,
-            recommendationIds: parsedResult.suggested_ids,
-            userPhoto: image
-          });
-        }
-        setStep('results');
-      } catch (err) {
-        console.error("Analysis process error:", err);
-        setError("Виникла помилка під час аналізу. Спробуйте ще раз через хвилину.");
-        setStep('questions');
-      } finally {
-        setLoading(false);
+    try {
+      // 1. Завантаження бази Hillary
+      setLoadingStatus('Підвантажуємо базу Hillary Cosmetics...');
+      setLoadingProgress(30);
+      let products = hillaryProducts;
+      if (products.length === 0) {
+        products = await fetchProducts();
       }
-    };
+      
+      if (products.length === 0) {
+        throw new Error("Не вдалося завантажити каталог товарів.");
+      }
 
-    await performRequest();
+      setLoadingProgress(50);
+      setLoadingStatus('Штучний інтелект вивчає ваше фото...');
+
+      const productContext = products.slice(0, 45).map(p => 
+        `АРТ: ${p.id} | ${p.name} | ${p.description}`
+      ).join('\n---\n');
+
+      const systemPrompt = `Ти - професійний ШІ-косметолог бренду HiLLARY Cosmetics.
+      Твоє завдання:
+      1. Перевір, чи на фото обличчя. Якщо ні - поверни is_human_face: false.
+      2. Проаналізуй стан шкіри та підбери 3-4 ID товарів.
+      Поверни ТІЛЬКИ JSON:
+      {
+        "is_human_face": true,
+        "skin_condition": "опис",
+        "advice": "порада",
+        "suggested_ids": ["id1", "id2"],
+        "skin_type": "тип"
+      }
+      СПИСОК ТОВАРІВ: ${productContext}`;
+
+      // 2. Запит до Gemini
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            role: "user",
+            parts: [
+              { text: `Вік: ${userData.age}, Тип: ${userData.skinType}, Скарги: ${userData.concerns}.` },
+              { inlineData: { mimeType: "image/png", data: base64Image } }
+            ]
+          }],
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          generationConfig: { responseMimeType: "application/json" }
+        })
+      });
+
+      setLoadingProgress(80);
+      setLoadingStatus('Підбираємо персональний догляд...');
+
+      if (!response.ok) throw new Error("API Gemini недоступне");
+
+      const data = await response.json();
+      const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      const parsedResult = JSON.parse(aiText.replace(/```json|```/g, "").trim());
+      
+      if (!parsedResult.is_human_face) {
+        setError(parsedResult.rejection_reason || "Обличчя не знайдено.");
+        setStep('upload');
+        setLoading(false);
+        return;
+      }
+
+      setLoadingProgress(95);
+      setLoadingStatus('Готуємо ваш результат...');
+
+      setAnalysis(parsedResult);
+      const matchedItems = products.filter(p => parsedResult.suggested_ids.includes(p.id));
+      setRecommendations(matchedItems.length > 0 ? matchedItems : products.slice(0, 3));
+      
+      if (user) {
+        await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'history'), {
+          date: new Date().toISOString(),
+          analysis: parsedResult,
+          recommendationIds: parsedResult.suggested_ids,
+          userPhoto: image
+        });
+      }
+      
+      setLoadingProgress(100);
+      setTimeout(() => setStep('results'), 500);
+
+    } catch (err) {
+      console.error(err);
+      setError("Помилка під час аналізу. Спробуйте оновити сторінку.");
+      setStep('questions');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -294,12 +276,9 @@ export default function App() {
           </div>
           <span className="font-bold text-lg tracking-tight uppercase text-blue-600 dark:text-blue-400">HiLLARY AI</span>
         </div>
-        <div className="flex items-center gap-3">
-          {productsLoading && <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />}
-          <button onClick={() => setStep('history')} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors">
-            <History className="w-5 h-5 text-slate-400" />
-          </button>
-        </div>
+        <button onClick={() => setStep('history')} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors">
+          <History className="w-5 h-5 text-slate-400" />
+        </button>
       </header>
 
       <main className="flex-1 overflow-y-auto">
@@ -311,11 +290,10 @@ export default function App() {
             <h1 className="text-3xl font-black mb-4 tracking-tight leading-tight uppercase text-slate-800 dark:text-white">Персональний догляд</h1>
             <p className="text-slate-500 dark:text-slate-400 mb-12 leading-relaxed text-sm font-medium px-4">ШІ Hillary проаналізує вашу шкіру за фото та підбере індивідуальний догляд.</p>
             <button 
-              disabled={productsLoading}
               onClick={() => setStep('upload')} 
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-[2rem] font-bold text-lg shadow-xl shadow-blue-100 dark:shadow-none active:scale-95 transition-all uppercase tracking-wider disabled:opacity-50"
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-[2rem] font-bold text-lg shadow-xl shadow-blue-100 dark:shadow-none active:scale-95 transition-all uppercase tracking-wider"
             >
-              {productsLoading ? "Завантаження бази..." : "Почати аналіз"}
+              Почати аналіз
             </button>
           </div>
         )}
@@ -346,7 +324,7 @@ export default function App() {
                 <input 
                   type="number" 
                   value={userData.age}
-                  placeholder="Наприклад: 25"
+                  placeholder="25"
                   className="w-full p-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 focus:border-blue-500 outline-none font-bold text-lg text-slate-900 dark:text-white"
                   onChange={(e) => setUserData({...userData, age: e.target.value})}
                 />
@@ -355,7 +333,7 @@ export default function App() {
                 <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 ml-1 block mb-2">Ваш тип шкіри</label>
                 <div className="grid grid-cols-2 gap-2">
                   {['Суха', 'Жирна', 'Комбінована', 'Не знаю'].map(t => (
-                    <button key={t} onClick={() => setUserData({...userData, skinType: t})} className={`p-4 rounded-2xl border-2 font-bold text-xs transition-all ${userData.skinType === t ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400' : 'border-slate-100 dark:border-slate-800 text-slate-400 dark:text-slate-600'}`}>{t}</button>
+                    <button key={t} onClick={() => setUserData({...userData, skinType: t})} className={`p-4 rounded-2xl border-2 font-bold text-xs transition-all ${userData.skinType === t ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400' : 'border-slate-100 dark:border-slate-800 text-slate-400 dark:text-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800'}`}>{t}</button>
                   ))}
                 </div>
               </div>
@@ -381,15 +359,25 @@ export default function App() {
         )}
 
         {step === 'analyzing' && (
-          <div className="flex flex-col items-center justify-center min-h-[70vh] p-8 text-center">
-            <div className="relative mb-8">
-               <Loader2 className="w-16 h-16 text-blue-600 animate-spin"/>
-               <div className="absolute inset-0 flex items-center justify-center">
-                  <Sparkles className="w-6 h-6 text-blue-300 animate-pulse" />
+          <div className="flex flex-col items-center justify-center min-h-[70vh] p-8 text-center animate-in fade-in">
+            <div className="relative mb-12">
+               <div className="w-20 h-20 bg-blue-600/10 rounded-full flex items-center justify-center animate-pulse">
+                  <Loader2 className="w-10 h-10 text-blue-600 animate-spin"/>
                </div>
             </div>
-            <h3 className="text-xl font-bold uppercase tracking-tight dark:text-white">Йде аналіз...</h3>
-            <p className="text-slate-400 dark:text-slate-500 text-sm mt-3 font-medium italic px-4">ШІ Hillary порівнює стан вашої шкіри з найкращими формулами нашого бренду</p>
+            
+            <h3 className="text-xl font-bold uppercase tracking-tight dark:text-white mb-2">{loadingStatus}</h3>
+            
+            <div className="w-full max-w-[200px] h-1.5 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden mt-6">
+              <div 
+                className="h-full bg-blue-600 transition-all duration-500 ease-out" 
+                style={{ width: `${loadingProgress}%` }}
+              ></div>
+            </div>
+            
+            <p className="text-slate-400 dark:text-slate-500 text-xs mt-6 font-medium italic px-4 leading-relaxed">
+              Це може зайняти до 15 секунд. Наш ШІ ретельно перевіряє кожну пору для найкращого результату.
+            </p>
           </div>
         )}
 
@@ -442,7 +430,7 @@ export default function App() {
 
         {step === 'history' && (
           <div className="p-6 animate-in slide-in-from-left-4">
-            <button onClick={() => setStep('welcome')} className="mb-6 flex items-center gap-2 text-slate-400 text-[10px] font-black uppercase tracking-widest"><ArrowLeft className="w-4 h-4"/> Назад</button>
+            <button onClick={() => setStep('welcome')} className="mb-6 flex items-center gap-2 text-slate-400 text-[10px] font-black uppercase tracking-widest transition-colors"><ArrowLeft className="w-4 h-4"/> Назад</button>
             <h2 className="text-2xl font-black mb-8 text-slate-800 dark:text-white uppercase tracking-tight">Ваша історія</h2>
             <div className="space-y-4 pb-12">
               {pastAnalyses.length === 0 ? (
