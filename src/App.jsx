@@ -197,7 +197,8 @@ export default function App() {
       const callAIWithRetry = async (retries = 0) => {
         const delays = [1000, 2000, 4000, 8000, 16000];
         try {
-          const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+          const response = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -214,7 +215,7 @@ export default function App() {
           });
 
           if (!response.ok) {
-            if (retries < 5) {
+            if (retries < 4) {
               await new Promise(r => setTimeout(r, delays[retries]));
               return callAIWithRetry(retries + 1);
             }
@@ -222,7 +223,7 @@ export default function App() {
           }
           return await response.json();
         } catch (err) {
-          if (retries < 5) {
+          if (retries < 4) {
             await new Promise(r => setTimeout(r, delays[retries]));
             return callAIWithRetry(retries + 1);
           }
@@ -253,7 +254,8 @@ export default function App() {
       setRecommendations(matchedItems.length > 0 ? matchedItems : products.slice(0, 3));
       
       if (user) {
-        await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'history'), {
+        const historyRef = collection(db, 'artifacts', appId, 'users', user.uid, 'history');
+        await addDoc(historyRef, {
           date: new Date().toISOString(),
           analysis: parsedResult,
           recommendationIds: parsedResult.suggested_ids,
@@ -265,7 +267,7 @@ export default function App() {
       setTimeout(() => setStep('results'), 300);
 
     } catch (err) {
-      setError(`Збій аналізу. Спробуйте ще раз пізніше.`);
+      setError(`Збій аналізу. Перевірте з'єднання або спробуйте інше фото.`);
       setStep('questions');
     } finally {
       setLoading(false);
@@ -357,10 +359,13 @@ export default function App() {
                </div>
                <Sparkles className="absolute -top-2 -right-2 w-6 h-6 text-yellow-400 animate-bounce" />
             </div>
+            
             <h3 className="text-xl font-bold uppercase tracking-tight dark:text-white mb-2">{loadingStatus}</h3>
+            
             <div className="w-full max-w-[240px] h-2 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden mt-6 shadow-inner">
               <div className="h-full bg-blue-600 transition-all duration-700 ease-out shadow-[0_0_10px_rgba(37,99,235,0.5)]" style={{ width: `${loadingProgress}%` }}></div>
             </div>
+            
             <p className="text-slate-400 dark:text-slate-500 text-xs mt-6 font-medium italic px-4 leading-relaxed">Зачекайте кілька секунд. ШІ Hillary підбирає найкращу програму для вас.</p>
           </div>
         )}
