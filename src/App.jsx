@@ -45,7 +45,7 @@ export default function App() {
   const [hillaryProducts, setHillaryProducts] = useState([]);
   const [isProfileSaving, setIsProfileSaving] = useState(false);
   
-  // Ключ має бути порожнім рядком для автоматичної підстановки середовищем
+  // Ключ залишається порожнім для автоматичної підстановки
   const apiKey = ""; 
 
   useEffect(() => {
@@ -101,7 +101,7 @@ export default function App() {
   const fetchProducts = async () => {
     try {
       const response = await fetch(PRODUCT_DATA_URL);
-      if (!response.ok) throw new Error("File not found");
+      if (!response.ok) throw new Error("Catalog not found");
       
       const data = await response.json();
       const items = Array.isArray(data) ? data : (data.products || data.offers || []);
@@ -165,7 +165,7 @@ export default function App() {
     saveProfile().catch(() => {});
 
     try {
-      setLoadingStatus('Завантаження каталогу...');
+      setLoadingStatus('Підготовка каталогу...');
       setLoadingProgress(30);
       let products = hillaryProducts;
       if (products.length === 0) {
@@ -173,27 +173,33 @@ export default function App() {
       }
       
       setLoadingProgress(50);
-      setLoadingStatus('AI аналізує вашу шкіру...');
+      setLoadingStatus('ШІ аналізує вашу шкіру...');
 
       const productContext = products.slice(0, 50).map(p => 
         `ID: ${p.id} | ${p.name} | ${p.description}`
       ).join('\n---\n');
 
-      const systemPrompt = `Ти - професійний косметолог Hillary. Проаналізуй фото та анкету. 
-      Підбери 3-4 ID зі списку товарів. 
-      Відповідь ПОВИННА бути ТІЛЬКИ у форматі JSON:
-      {
-        "is_human_face": true,
-        "skin_condition": "детальний опис стану",
-        "advice": "головна порада",
-        "suggested_ids": ["id1", "id2"],
-        "skin_type": "тип шкіри"
-      }
-      ТОВАРИ ДЛЯ ВИБОРУ: ${productContext}`;
+      // Переносимо системні інструкції безпосередньо в промпт для стабільності
+      const combinedPrompt = `Ти - професійний косметолог Hillary. Проаналізуй фото та анкету користувача. 
+Користувач: вік ${userData.age}, тип шкіри ${userData.skinType}, скарги: ${userData.concerns || 'відсутні'}.
 
-      const userQuery = `Користувач: вік ${userData.age}, тип шкіри ${userData.skinType}, скарги: ${userData.concerns || 'відсутні'}.`;
+Твоє завдання:
+1. Перевір, чи є на фото обличчя людини.
+2. Детально проаналізуй стан шкіри (пори, текстура, тон).
+3. Підбери 3-4 ID товарів із наданого списку нижче.
 
-      // Реалізація експоненціальної затримки (Exponential Backoff)
+Поверни відповідь СУВОРО в форматі JSON без зайвого тексту:
+{
+  "is_human_face": true,
+  "skin_condition": "детальний опис",
+  "advice": "головна порада",
+  "suggested_ids": ["id1", "id2", "id3"],
+  "skin_type": "визначений тип шкіри"
+}
+
+СПИСОК ТОВАРІВ:
+${productContext}`;
+
       const callAIWithRetry = async (retries = 0) => {
         const delays = [1000, 2000, 4000, 8000, 16000];
         try {
@@ -205,25 +211,23 @@ export default function App() {
               contents: [{
                 role: "user",
                 parts: [
-                  { text: userQuery },
+                  { text: combinedPrompt },
                   { inlineData: { mimeType: imageMimeType, data: base64Image } }
                 ]
-              }],
-              systemInstruction: { parts: [{ text: systemPrompt }] },
-              generationConfig: { responseMimeType: "application/json" }
+              }]
             })
           });
 
           if (!response.ok) {
-            if (retries < 4) {
+            if (retries < 5) {
               await new Promise(r => setTimeout(r, delays[retries]));
               return callAIWithRetry(retries + 1);
             }
-            throw new Error(`API Error: ${response.status}`);
+            throw new Error(`API ${response.status}`);
           }
           return await response.json();
         } catch (err) {
-          if (retries < 4) {
+          if (retries < 5) {
             await new Promise(r => setTimeout(r, delays[retries]));
             return callAIWithRetry(retries + 1);
           }
@@ -234,20 +238,20 @@ export default function App() {
       const result = await callAIWithRetry();
       const aiText = result.candidates?.[0]?.content?.parts?.[0]?.text;
       
-      if (!aiText) throw new Error("No response from AI");
+      if (!aiText) throw new Error("Порожня відповідь ШІ");
 
       const jsonMatch = aiText.match(/\{[\s\S]*\}/);
       const parsedResult = JSON.parse(jsonMatch ? jsonMatch[0] : aiText);
       
       if (!parsedResult.is_human_face) {
-        setError("Ми не впізнали обличчя. Спробуйте інше фото при кращому освітленні.");
+        setError("Ми не змогли чітко побачити обличчя. Спробуйте зробити селфі при кращому освітленні.");
         setStep('upload');
         setLoading(false);
         return;
       }
 
       setLoadingProgress(90);
-      setLoadingStatus('Підбір засобів...');
+      setLoadingStatus('Складання рекомендацій...');
 
       setAnalysis(parsedResult);
       const matchedItems = products.filter(p => parsedResult.suggested_ids.includes(p.id));
@@ -267,7 +271,7 @@ export default function App() {
       setTimeout(() => setStep('results'), 300);
 
     } catch (err) {
-      setError(`Збій аналізу. Перевірте з'єднання або спробуйте інше фото.`);
+      setError(`Збій аналізу. Можливо, сервіс перевантажений, спробуйте ще раз.`);
       setStep('questions');
     } finally {
       setLoading(false);
@@ -295,8 +299,8 @@ export default function App() {
               <Sparkles className="w-12 h-12 text-blue-500" />
             </div>
             <h1 className="text-3xl font-black mb-4 tracking-tight leading-tight uppercase text-slate-800 dark:text-white">Hillary AI<br/>Expert</h1>
-            <p className="text-slate-500 dark:text-slate-400 mb-12 leading-relaxed text-sm font-medium px-4">Отримайте професійну програму догляду на основі аналізу вашої шкіри за допомогою ШІ.</p>
-            <button onClick={() => setStep('upload')} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-[2rem] font-bold text-lg shadow-xl shadow-blue-100 dark:shadow-none active:scale-95 transition-all uppercase tracking-wider">Почати</button>
+            <p className="text-slate-500 dark:text-slate-400 mb-12 leading-relaxed text-sm font-medium px-4">Отримайте індивідуальну програму догляду від ШІ на основі аналізу вашої шкіри.</p>
+            <button onClick={() => setStep('upload')} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-[2rem] font-bold text-lg shadow-xl shadow-blue-100 dark:shadow-none active:scale-95 transition-all uppercase tracking-wider">Почати аналіз</button>
           </div>
         )}
 
@@ -304,7 +308,7 @@ export default function App() {
           <div className="p-6 animate-in slide-in-from-right-4">
             <button onClick={() => setStep('welcome')} className="mb-6 flex items-center gap-2 text-slate-400 text-[10px] font-black uppercase tracking-widest"><ArrowLeft className="w-4 h-4"/> Назад</button>
             <h2 className="text-2xl font-black mb-2 uppercase tracking-tight">Крок 1: Фото</h2>
-            <p className="text-slate-500 dark:text-slate-400 mb-8 text-sm font-medium">Зробіть селфі при денному світлі для кращого результату.</p>
+            <p className="text-slate-500 dark:text-slate-400 mb-8 text-sm font-medium">Зробіть селфі при денному світлі для максимально точного аналізу.</p>
             
             <div className="border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-[3rem] p-16 flex flex-col items-center bg-white dark:bg-slate-900/30 relative hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors cursor-pointer group">
               <input 
@@ -327,7 +331,7 @@ export default function App() {
         {step === 'questions' && (
           <div className="p-6 animate-in slide-in-from-right-4">
              <button onClick={() => setStep('upload')} className="mb-4 flex items-center gap-2 text-slate-400 text-[10px] font-black uppercase tracking-widest"><ArrowLeft className="w-4 h-4"/> До фото</button>
-            <h2 className="text-2xl font-black mb-6 uppercase tracking-tight">Крок 2: Деталі</h2>
+            <h2 className="text-2xl font-black mb-6 uppercase tracking-tight">Крок 2: Анкета</h2>
             <div className="space-y-6">
               <div>
                 <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 ml-1 block mb-2">Ваш вік</label>
@@ -343,9 +347,9 @@ export default function App() {
               </div>
               <div>
                 <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 ml-1 block mb-2">Що вас турбує?</label>
-                <textarea value={userData.concerns} placeholder="Наприклад: сухість, висипи, тьмяний колір..." className="w-full p-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 focus:border-blue-500 outline-none h-28 resize-none text-sm font-medium leading-relaxed text-slate-900 dark:text-white transition-all" onChange={(e) => setUserData({...userData, concerns: e.target.value})} />
+                <textarea value={userData.concerns} placeholder="Наприклад: сухість, висипи, зморшки..." className="w-full p-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 focus:border-blue-500 outline-none h-28 resize-none text-sm font-medium leading-relaxed text-slate-900 dark:text-white transition-all" onChange={(e) => setUserData({...userData, concerns: e.target.value})} />
               </div>
-              <button onClick={runAIAnalysis} disabled={!userData.age || loading} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-[2rem] font-bold shadow-xl active:scale-95 transition-all uppercase tracking-widest disabled:opacity-50">Аналізувати</button>
+              <button onClick={runAIAnalysis} disabled={!userData.age || loading} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-[2rem] font-bold shadow-xl active:scale-95 transition-all uppercase tracking-widest disabled:opacity-50">Аналізувати шкіру</button>
             </div>
             {error && <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-2xl text-xs font-bold flex gap-2"><AlertCircle className="w-4 h-4 shrink-0"/>{error}</div>}
           </div>
@@ -383,7 +387,7 @@ export default function App() {
                    <div className="p-2 bg-green-50 dark:bg-green-900/20 rounded-lg">
                       <CheckCircle2 className="text-green-500 w-5 h-5"/>
                    </div>
-                   <h3 className="font-bold text-lg uppercase tracking-tight italic text-slate-800 dark:text-white">Ваш аналіз</h3>
+                   <h3 className="font-bold text-lg uppercase tracking-tight italic text-slate-800 dark:text-white">Результат</h3>
                 </div>
                 <p className="text-slate-700 dark:text-slate-300 text-sm mb-6 leading-relaxed font-medium">{analysis.skin_condition}</p>
                 <div className="bg-blue-50 dark:bg-blue-900/20 p-5 rounded-3xl flex items-start gap-3 border-l-4 border-blue-600 shadow-sm">
@@ -392,7 +396,7 @@ export default function App() {
                 </div>
               </div>
 
-              <h3 className="text-xl font-black text-slate-800 dark:text-white mb-6 px-2 uppercase tracking-tight">Рекомендований догляд:</h3>
+              <h3 className="text-xl font-black text-slate-800 dark:text-white mb-6 px-2 uppercase tracking-tight">Програма догляду:</h3>
               <div className="space-y-4">
                 {recommendations.map(item => (
                   <div key={item.id} className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-5 rounded-[2.5rem] shadow-sm hover:shadow-lg transition-all group">
@@ -404,7 +408,7 @@ export default function App() {
                     <p className="text-slate-500 dark:text-slate-400 text-xs leading-relaxed mb-4 font-medium line-clamp-3">{item.description}</p>
                     <div className="flex justify-between items-center border-t border-slate-50 dark:border-slate-800 pt-4">
                        <span className="font-black text-blue-600 dark:text-blue-400 text-xl">{item.price} грн</span>
-                       <a href={item.link} target="_blank" rel="noopener noreferrer" className="bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-black uppercase tracking-widest px-7 py-4 rounded-2xl transition-all shadow-lg active:scale-95">Купити</a>
+                       <a href={item.link} target="_blank" rel="noopener noreferrer" className="bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-black uppercase tracking-widest px-7 py-4 rounded-2xl transition-all shadow-lg active:scale-95">Придбати</a>
                     </div>
                   </div>
                 ))}
