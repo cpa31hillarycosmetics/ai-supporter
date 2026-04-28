@@ -22,7 +22,6 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'hillary-skin-care-ap
 // --- ДЖЕРЕЛО ДАНИХ ТОВАРІВ (Локальний JSON) ---
 const PRODUCT_DATA_URL = "./hillary_products_converted.json";
 
-// Резервний список товарів на випадок, якщо файл не знайдено
 const FALLBACK_PRODUCTS = [
   { id: "101", name: "Очищувальна пінка для вмивання", description: "М'яко очищує шкіру, не пересушуючи її. Підходить для всіх типів.", link: "https://hillary.ua", price: "249" },
   { id: "102", name: "Гіалуронова сироватка Smart", description: "Інтенсивно зволожує та розгладжує дрібні зморшки.", link: "https://hillary.ua", price: "389" },
@@ -46,10 +45,9 @@ export default function App() {
   const [hillaryProducts, setHillaryProducts] = useState([]);
   const [isProfileSaving, setIsProfileSaving] = useState(false);
   
-  // ВАЖЛИВО: Залишаємо порожнім рядком, ключ підставиться автоматично
+  // Ключ має бути порожнім рядком для автоматичної підстановки середовищем
   const apiKey = ""; 
 
-  // 1. Ініціалізація та Авторизація
   useEffect(() => {
     if (window.Telegram && window.Telegram.WebApp) {
       const tg = window.Telegram.WebApp;
@@ -67,9 +65,7 @@ export default function App() {
         } else {
           await signInAnonymously(auth);
         }
-      } catch (e) {
-        console.error("Auth error:", e);
-      }
+      } catch (e) {}
     };
     initAuth();
     
@@ -79,7 +75,6 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 2. Завантаження профілю та історії
   useEffect(() => {
     if (!user) return;
     
@@ -90,9 +85,7 @@ export default function App() {
           const data = profileSnap.data();
           setUserData(prev => ({ ...prev, age: data.age || '', skinType: data.skinType || 'не знаю' }));
         }
-      } catch (err) {
-        console.error("Error fetching profile:", err);
-      }
+      } catch (err) {}
     };
     fetchProfile();
 
@@ -100,28 +93,21 @@ export default function App() {
     const unsubscribe = onSnapshot(historyRef, (snapshot) => {
       const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setPastAnalyses(items.sort((a, b) => new Date(b.date) - new Date(a.date)));
-    }, (err) => {
-      console.error("History listener error:", err);
-    });
+    }, (err) => {});
     
     return () => unsubscribe();
   }, [user]);
 
-  // Функція завантаження локального JSON
   const fetchProducts = async () => {
     try {
       const response = await fetch(PRODUCT_DATA_URL);
-      if (!response.ok) throw new Error("Локальний файл не знайдено");
+      if (!response.ok) throw new Error("File not found");
       
       const data = await response.json();
       const items = Array.isArray(data) ? data : (data.products || data.offers || []);
-      
-      if (items.length === 0) throw new Error("Файл порожній");
-      
       setHillaryProducts(items);
       return items;
     } catch (err) {
-      console.error("Failed to load local JSON, using fallback:", err);
       setHillaryProducts(FALLBACK_PRODUCTS);
       return FALLBACK_PRODUCTS;
     }
@@ -137,7 +123,6 @@ export default function App() {
         updatedAt: new Date().toISOString()
       });
     } catch (e) {
-      console.error("Save profile error:", e);
     } finally {
       if (manual) setIsProfileSaving(false);
     }
@@ -147,24 +132,17 @@ export default function App() {
     const file = e.target.files[0];
     if (file) {
       if (file.size > 10 * 1024 * 1024) {
-        setError("Файл занадто великий. Максимальний розмір — 10МБ.");
+        setError("Файл занадто великий (макс. 10МБ)");
         return;
       }
 
       const reader = new FileReader();
       reader.onload = (event) => {
-        try {
-          setImage(URL.createObjectURL(file));
-          setImageMimeType(file.type);
-          setBase64Image(event.target.result.split(',')[1]);
-          setError(null);
-          setStep('questions');
-        } catch (err) {
-          setError("Помилка обробки фото. Спробуйте ще раз.");
-        }
-      };
-      reader.onerror = () => {
-        setError("Не вдалося прочитати файл. Спробуйте інше фото.");
+        setImage(URL.createObjectURL(file));
+        setImageMimeType(file.type);
+        setBase64Image(event.target.result.split(',')[1]);
+        setError(null);
+        setStep('questions');
       };
       reader.readAsDataURL(file);
     }
@@ -173,22 +151,21 @@ export default function App() {
 
   const runAIAnalysis = async () => {
     if (!base64Image) {
-      setError("Будь ласка, завантажте фото.");
+      setError("Будь ласка, завантажте фото");
       setStep('upload');
       return;
     }
 
     setLoading(true);
     setLoadingProgress(10);
-    setLoadingStatus('Ініціалізація аналізу...');
+    setLoadingStatus('Ініціалізація...');
     setStep('analyzing');
     setError(null);
     
-    saveProfile().catch(console.error);
+    saveProfile().catch(() => {});
 
     try {
-      // 1. Завантаження каталогу
-      setLoadingStatus('Підвантажуємо базу Hillary...');
+      setLoadingStatus('Завантаження каталогу...');
       setLoadingProgress(30);
       let products = hillaryProducts;
       if (products.length === 0) {
@@ -196,7 +173,7 @@ export default function App() {
       }
       
       setLoadingProgress(50);
-      setLoadingStatus('AI вивчає ваш стан шкіри...');
+      setLoadingStatus('AI аналізує вашу шкіру...');
 
       const productContext = products.slice(0, 50).map(p => 
         `ID: ${p.id} | ${p.name} | ${p.description}`
@@ -204,66 +181,72 @@ export default function App() {
 
       const systemPrompt = `Ти - професійний косметолог Hillary. Проаналізуй фото та анкету. 
       Підбери 3-4 ID зі списку товарів. 
-      Відповідь ТІЛЬКИ у форматі JSON:
+      Відповідь ПОВИННА бути ТІЛЬКИ у форматі JSON:
       {
         "is_human_face": true,
-        "skin_condition": "детальний опис",
+        "skin_condition": "детальний опис стану",
         "advice": "головна порада",
-        "suggested_ids": ["артикул1", "артикул2"],
-        "skin_type": "тип"
+        "suggested_ids": ["id1", "id2"],
+        "skin_type": "тип шкіри"
       }
-      ТОВАРИ: ${productContext}`;
+      ТОВАРИ ДЛЯ ВИБОРУ: ${productContext}`;
 
-      // 2. Запит до Gemini (використання v1beta та gemini-2.5-flash-preview-09-2025)
-      const modelName = "gemini-2.5-flash-preview-09-2025";
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+      const userQuery = `Користувач: вік ${userData.age}, тип шкіри ${userData.skinType}, скарги: ${userData.concerns || 'відсутні'}.`;
 
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            role: "user",
-            parts: [
-              { text: `Вік: ${userData.age}, Тип: ${userData.skinType}, Скарги: ${userData.concerns}.` },
-              { inlineData: { mimeType: imageMimeType, data: base64Image } }
-            ]
-          }],
-          systemInstruction: { parts: [{ text: systemPrompt }] },
-          generationConfig: { 
-            responseMimeType: "application/json",
-            temperature: 0.7
+      // Реалізація експоненціальної затримки (Exponential Backoff)
+      const callAIWithRetry = async (retries = 0) => {
+        const delays = [1000, 2000, 4000, 8000, 16000];
+        try {
+          const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{
+                role: "user",
+                parts: [
+                  { text: userQuery },
+                  { inlineData: { mimeType: imageMimeType, data: base64Image } }
+                ]
+              }],
+              systemInstruction: { parts: [{ text: systemPrompt }] },
+              generationConfig: { responseMimeType: "application/json" }
+            })
+          });
+
+          if (!response.ok) {
+            if (retries < 5) {
+              await new Promise(r => setTimeout(r, delays[retries]));
+              return callAIWithRetry(retries + 1);
+            }
+            throw new Error(`API Error: ${response.status}`);
           }
-        })
-      });
+          return await response.json();
+        } catch (err) {
+          if (retries < 5) {
+            await new Promise(r => setTimeout(r, delays[retries]));
+            return callAIWithRetry(retries + 1);
+          }
+          throw err;
+        }
+      };
 
-      setLoadingProgress(80);
-      setLoadingStatus('Підбираємо найкращі засоби...');
-
-      if (!response.ok) {
-        const errText = await response.text();
-        console.error("Gemini API Error details:", errText);
-        throw new Error(`Помилка API ШІ: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      const result = await callAIWithRetry();
+      const aiText = result.candidates?.[0]?.content?.parts?.[0]?.text;
       
-      if (!aiText) throw new Error("ШІ не повернув відповіді.");
+      if (!aiText) throw new Error("No response from AI");
 
       const jsonMatch = aiText.match(/\{[\s\S]*\}/);
-      const cleanJson = jsonMatch ? jsonMatch[0] : aiText.replace(/```json|```/g, "").trim();
-      const parsedResult = JSON.parse(cleanJson);
+      const parsedResult = JSON.parse(jsonMatch ? jsonMatch[0] : aiText);
       
       if (!parsedResult.is_human_face) {
-        setError(parsedResult.rejection_reason || "Ми не впізнали обличчя на фото.");
+        setError("Ми не впізнали обличчя. Спробуйте інше фото при кращому освітленні.");
         setStep('upload');
         setLoading(false);
         return;
       }
 
-      setLoadingProgress(95);
-      setLoadingStatus('Майже готово...');
+      setLoadingProgress(90);
+      setLoadingStatus('Підбір засобів...');
 
       setAnalysis(parsedResult);
       const matchedItems = products.filter(p => parsedResult.suggested_ids.includes(p.id));
@@ -279,11 +262,10 @@ export default function App() {
       }
       
       setLoadingProgress(100);
-      setTimeout(() => setStep('results'), 500);
+      setTimeout(() => setStep('results'), 300);
 
     } catch (err) {
-      console.error("Full analysis error:", err);
-      setError(`Збій аналізу: ${err.message || "спробуйте пізніше"}.`);
+      setError(`Збій аналізу. Спробуйте ще раз пізніше.`);
       setStep('questions');
     } finally {
       setLoading(false);
@@ -333,7 +315,7 @@ export default function App() {
               <div className="w-16 h-16 bg-blue-50 dark:bg-slate-800 rounded-full flex items-center justify-center mb-4 shadow-sm border dark:border-slate-700 group-active:scale-90 transition-transform">
                 <Camera className="text-blue-500 w-8 h-8" />
               </div>
-              <span className="font-bold text-slate-700 dark:text-slate-300 uppercase text-[10px] tracking-widest text-center">Натисніть,<br/>щоб зробити селфі</span>
+              <span className="font-bold text-slate-700 dark:text-slate-300 uppercase text-[10px] tracking-widest text-center">Натисніть,<br/>щоб додати фото</span>
             </div>
             
             {error && <div className="mt-6 p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-2xl text-xs font-bold flex gap-2"><AlertCircle className="w-4 h-4 shrink-0"/>{error}</div>}
@@ -375,16 +357,11 @@ export default function App() {
                </div>
                <Sparkles className="absolute -top-2 -right-2 w-6 h-6 text-yellow-400 animate-bounce" />
             </div>
-            
             <h3 className="text-xl font-bold uppercase tracking-tight dark:text-white mb-2">{loadingStatus}</h3>
-            
             <div className="w-full max-w-[240px] h-2 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden mt-6 shadow-inner">
               <div className="h-full bg-blue-600 transition-all duration-700 ease-out shadow-[0_0_10px_rgba(37,99,235,0.5)]" style={{ width: `${loadingProgress}%` }}></div>
             </div>
-            
-            <p className="text-slate-400 dark:text-slate-500 text-xs mt-6 font-medium italic px-4 leading-relaxed">
-              Майже готово! ШІ Hillary ретельно підбирає засоби, що підійдуть саме вашій шкірі.
-            </p>
+            <p className="text-slate-400 dark:text-slate-500 text-xs mt-6 font-medium italic px-4 leading-relaxed">Зачекайте кілька секунд. ШІ Hillary підбирає найкращу програму для вас.</p>
           </div>
         )}
 
@@ -438,7 +415,7 @@ export default function App() {
             <h2 className="text-2xl font-black mb-8 text-slate-800 dark:text-white uppercase tracking-tight">Ваша історія</h2>
             <div className="space-y-4 pb-12">
               {pastAnalyses.length === 0 ? (
-                <div className="text-center py-24 text-slate-300 dark:text-slate-800 font-bold italic text-xs uppercase tracking-widest leading-loose">У вас поки немає<br/>збережених аналізів</div>
+                <div className="text-center py-24 text-slate-300 dark:text-slate-800 font-bold italic text-xs uppercase tracking-widest leading-loose">Історія порожня</div>
               ) : (
                 pastAnalyses.map(item => (
                   <div key={item.id} className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-4 rounded-[2rem] shadow-sm flex items-center gap-4 transition-all hover:border-blue-200 dark:hover:border-blue-900 active:scale-[0.98] cursor-pointer" onClick={() => { 
