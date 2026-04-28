@@ -2,14 +2,52 @@
 <html lang="uk">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Hillary AI Expert</title>
-    <!-- Чисті посилання на скрипти -->
+    
+    <!-- Telegram Web App SDK -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    
+    <!-- Tailwind CSS для дизайну -->
     <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script>
+        // Налаштування Tailwind для підтримки темної теми через клас 'dark'
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    animation: {
+                        'fade-in': 'fadeIn 0.5s ease-out forwards',
+                    },
+                    keyframes: {
+                        fadeIn: {
+                            '0%': { opacity: '0', transform: 'translateY(10px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <style>
+        /* Прибираємо стандартні виділення при натисканні на мобільних пристроях */
+        * {
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        /* Плавний перехід кольору фону при зміні теми */
+        body {
+            transition: background-color 0.3s ease;
+        }
+    </style>
 </head>
-<body class="bg-gray-50">
+<body class="bg-slate-50 dark:bg-slate-950">
+    <!-- Точка входу для React застосунку -->
     <div id="root"></div>
+    
+    <!-- Підключення основного скрипту -->
     <script type="module" src="/src/main.jsx"></script>
 </body>
 </html>
