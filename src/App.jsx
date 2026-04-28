@@ -34,6 +34,7 @@ export default function App() {
   const [step, setStep] = useState('welcome');
   const [image, setImage] = useState(null);
   const [base64Image, setBase64Image] = useState(null);
+  const [imageMimeType, setImageMimeType] = useState('image/jpeg');
   const [userData, setUserData] = useState({ age: '', skinType: 'не знаю', concerns: '' });
   const [analysis, setAnalysis] = useState(null);
   const [recommendations, setRecommendations] = useState([]);
@@ -144,7 +145,6 @@ export default function App() {
   const onPhotoSelected = (e) => {
     const file = e.target.files[0];
     if (file) {
-      // Валідація розміру (макс 10MB)
       if (file.size > 10 * 1024 * 1024) {
         setError("Файл занадто великий. Максимальний розмір — 10МБ.");
         return;
@@ -154,6 +154,7 @@ export default function App() {
       reader.onload = (event) => {
         try {
           setImage(URL.createObjectURL(file));
+          setImageMimeType(file.type);
           setBase64Image(event.target.result.split(',')[1]);
           setError(null);
           setStep('questions');
@@ -166,7 +167,6 @@ export default function App() {
       };
       reader.readAsDataURL(file);
     }
-    // Очищаємо інпут, щоб можна було вибрати той самий файл знову
     e.target.value = "";
   };
 
@@ -208,7 +208,7 @@ export default function App() {
         "is_human_face": true,
         "skin_condition": "детальний опис",
         "advice": "головна порада",
-        "suggested_ids": ["артикул1", "артикул2"],
+        "suggested_ids": ["id1", "id2"],
         "skin_type": "тип"
       }
       ТОВАРИ: ${productContext}`;
@@ -222,7 +222,7 @@ export default function App() {
             role: "user",
             parts: [
               { text: `Вік: ${userData.age}, Тип: ${userData.skinType}, Скарги: ${userData.concerns}.` },
-              { inlineData: { mimeType: "image/png", data: base64Image } }
+              { inlineData: { mimeType: imageMimeType, data: base64Image } }
             ]
           }],
           systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -233,11 +233,20 @@ export default function App() {
       setLoadingProgress(80);
       setLoadingStatus('Підбираємо найкращі засоби...');
 
-      if (!response.ok) throw new Error("Gemini API Error");
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error("Gemini API Error details:", errText);
+        throw new Error(`Помилка API ШІ: ${response.status}`);
+      }
 
       const data = await response.json();
       const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      const cleanJson = aiText.replace(/```json|```/g, "").trim();
+      
+      if (!aiText) throw new Error("ШІ не повернув відповіді.");
+
+      // Покращене вилучення JSON
+      const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+      const cleanJson = jsonMatch ? jsonMatch[0] : aiText.replace(/```json|```/g, "").trim();
       const parsedResult = JSON.parse(cleanJson);
       
       if (!parsedResult.is_human_face) {
@@ -267,8 +276,8 @@ export default function App() {
       setTimeout(() => setStep('results'), 500);
 
     } catch (err) {
-      console.error(err);
-      setError("Помилка зв'язку. Будь ласка, спробуйте ще раз через кілька хвилин.");
+      console.error("Full analysis error:", err);
+      setError(`Збій аналізу: ${err.message || "спробуйте пізніше"}.`);
       setStep('questions');
     } finally {
       setLoading(false);
@@ -308,7 +317,6 @@ export default function App() {
             <p className="text-slate-500 dark:text-slate-400 mb-8 text-sm font-medium">Зробіть селфі при денному світлі для кращого результату.</p>
             
             <div className="border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-[3rem] p-16 flex flex-col items-center bg-white dark:bg-slate-900/30 relative hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors cursor-pointer group">
-              {/* Покращене поле вводу з високим z-index та атрибутом capture */}
               <input 
                 type="file" 
                 accept="image/*" 
@@ -316,7 +324,6 @@ export default function App() {
                 onChange={onPhotoSelected} 
                 className="absolute inset-0 opacity-0 cursor-pointer z-10 w-full h-full" 
               />
-              
               <div className="w-16 h-16 bg-blue-50 dark:bg-slate-800 rounded-full flex items-center justify-center mb-4 shadow-sm border dark:border-slate-700 group-active:scale-90 transition-transform">
                 <Camera className="text-blue-500 w-8 h-8" />
               </div>
@@ -362,13 +369,10 @@ export default function App() {
                </div>
                <Sparkles className="absolute -top-2 -right-2 w-6 h-6 text-yellow-400 animate-bounce" />
             </div>
-            
             <h3 className="text-xl font-bold uppercase tracking-tight dark:text-white mb-2">{loadingStatus}</h3>
-            
             <div className="w-full max-w-[240px] h-2 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden mt-6 shadow-inner">
               <div className="h-full bg-blue-600 transition-all duration-700 ease-out shadow-[0_0_10px_rgba(37,99,235,0.5)]" style={{ width: `${loadingProgress}%` }}></div>
             </div>
-            
             <p className="text-slate-400 dark:text-slate-500 text-xs mt-6 font-medium italic px-4 leading-relaxed">
               Майже готово! ШІ Hillary ретельно підбирає засоби, що підійдуть саме вашій шкірі.
             </p>
@@ -382,7 +386,6 @@ export default function App() {
               <div className="absolute inset-0 bg-gradient-to-t from-slate-50 dark:from-slate-950 via-transparent"></div>
               <button onClick={() => setStep('upload')} className="absolute top-4 right-4 bg-white/80 dark:bg-slate-900/80 p-3 rounded-2xl shadow-lg backdrop-blur-sm active:scale-90 transition-transform"><RefreshCcw className="w-5 h-5 text-slate-700 dark:text-slate-300" /></button>
             </div>
-            
             <div className="px-6 -mt-12 relative z-10">
               <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-7 shadow-2xl border border-slate-50 dark:border-slate-800 mb-8 transition-transform hover:scale-[1.01]">
                 <div className="flex items-center gap-2 mb-4">
@@ -399,7 +402,6 @@ export default function App() {
               </div>
 
               <h3 className="text-xl font-black text-slate-800 dark:text-white mb-6 px-2 uppercase tracking-tight">Рекомендований догляд:</h3>
-              
               <div className="space-y-4">
                 {recommendations.map(item => (
                   <div key={item.id} className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-5 rounded-[2.5rem] shadow-sm hover:shadow-lg transition-all group">
@@ -416,7 +418,6 @@ export default function App() {
                   </div>
                 ))}
               </div>
-              
               <button onClick={() => setStep('welcome')} className="w-full mt-12 py-5 text-slate-300 dark:text-slate-700 font-black uppercase tracking-[0.3em] text-[10px] hover:text-blue-600 transition-colors">Новий аналіз</button>
             </div>
           </div>
