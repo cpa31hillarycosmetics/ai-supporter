@@ -77,7 +77,7 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 2. Завантаження профілю
+  // 2. Завантаження профілю та історії
   useEffect(() => {
     if (!user) return;
     
@@ -144,15 +144,30 @@ export default function App() {
   const onPhotoSelected = (e) => {
     const file = e.target.files[0];
     if (file) {
+      // Валідація розміру (макс 10MB)
+      if (file.size > 10 * 1024 * 1024) {
+        setError("Файл занадто великий. Максимальний розмір — 10МБ.");
+        return;
+      }
+
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setImage(URL.createObjectURL(file));
-        setBase64Image(reader.result.split(',')[1]);
-        setError(null);
-        setStep('questions');
+      reader.onload = (event) => {
+        try {
+          setImage(URL.createObjectURL(file));
+          setBase64Image(event.target.result.split(',')[1]);
+          setError(null);
+          setStep('questions');
+        } catch (err) {
+          setError("Помилка обробки фото. Спробуйте ще раз.");
+        }
+      };
+      reader.onerror = () => {
+        setError("Не вдалося прочитати файл. Спробуйте інше фото.");
       };
       reader.readAsDataURL(file);
     }
+    // Очищаємо інпут, щоб можна було вибрати той самий файл знову
+    e.target.value = "";
   };
 
   const runAIAnalysis = async () => {
@@ -253,7 +268,7 @@ export default function App() {
 
     } catch (err) {
       console.error(err);
-      setError("Помилка зв'язку. Будь ласка, перевірте файли та спробуйте знову.");
+      setError("Помилка зв'язку. Будь ласка, спробуйте ще раз через кілька хвилин.");
       setStep('questions');
     } finally {
       setLoading(false);
@@ -291,13 +306,23 @@ export default function App() {
             <button onClick={() => setStep('welcome')} className="mb-6 flex items-center gap-2 text-slate-400 text-[10px] font-black uppercase tracking-widest"><ArrowLeft className="w-4 h-4"/> Назад</button>
             <h2 className="text-2xl font-black mb-2 uppercase tracking-tight">Крок 1: Фото</h2>
             <p className="text-slate-500 dark:text-slate-400 mb-8 text-sm font-medium">Зробіть селфі при денному світлі для кращого результату.</p>
+            
             <div className="border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-[3rem] p-16 flex flex-col items-center bg-white dark:bg-slate-900/30 relative hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors cursor-pointer group">
-              <input type="file" accept="image/*" onChange={onPhotoSelected} className="absolute inset-0 opacity-0 cursor-pointer" />
+              {/* Покращене поле вводу з високим z-index та атрибутом capture */}
+              <input 
+                type="file" 
+                accept="image/*" 
+                capture="user"
+                onChange={onPhotoSelected} 
+                className="absolute inset-0 opacity-0 cursor-pointer z-10 w-full h-full" 
+              />
+              
               <div className="w-16 h-16 bg-blue-50 dark:bg-slate-800 rounded-full flex items-center justify-center mb-4 shadow-sm border dark:border-slate-700 group-active:scale-90 transition-transform">
                 <Camera className="text-blue-500 w-8 h-8" />
               </div>
-              <span className="font-bold text-slate-700 dark:text-slate-300 uppercase text-[10px] tracking-widest text-center">Натисніть,<br/>щоб додати фото</span>
+              <span className="font-bold text-slate-700 dark:text-slate-300 uppercase text-[10px] tracking-widest text-center">Натисніть,<br/>щоб зробити селфі</span>
             </div>
+            
             {error && <div className="mt-6 p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-2xl text-xs font-bold flex gap-2"><AlertCircle className="w-4 h-4 shrink-0"/>{error}</div>}
           </div>
         )}
@@ -325,6 +350,7 @@ export default function App() {
               </div>
               <button onClick={runAIAnalysis} disabled={!userData.age || loading} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-[2rem] font-bold shadow-xl active:scale-95 transition-all uppercase tracking-widest disabled:opacity-50">Аналізувати</button>
             </div>
+            {error && <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-2xl text-xs font-bold flex gap-2"><AlertCircle className="w-4 h-4 shrink-0"/>{error}</div>}
           </div>
         )}
 
