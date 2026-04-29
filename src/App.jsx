@@ -2,7 +2,27 @@ import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, onSnapshot, doc, getDoc, setDoc } from 'firebase/firestore';
-import { Camera, RefreshCcw, Sparkles, ShoppingBag, CheckCircle2, AlertCircle, ChevronRight, ExternalLink, Lightbulb, History, ArrowLeft, Loader2, Home, User, Save } from 'lucide-react';
+import { 
+  Camera, 
+  RefreshCcw, 
+  Sparkles, 
+  CheckCircle2, 
+  AlertCircle, 
+  ChevronRight, 
+  ExternalLink, 
+  Lightbulb, 
+  History, 
+  ArrowLeft, 
+  Loader2, 
+  Home, 
+  User, 
+  Save,
+  ShoppingBag
+} from 'lucide-react';
+
+// --- НАЛАШТУВАННЯ SUPABASE (від розробника) ---
+const SUPABASE_URL = "https://xnedhbqsxrtizvdepdgs.supabase.co";
+const SUPABASE_KEY = "sb_publishable_DXW28ftwJV4ZpQQBchJfWw_iv-zs5xk";
 
 // --- НАЛАШТУВАННЯ FIREBASE ---
 const firebaseConfig = {
@@ -19,15 +39,6 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'hillary-skin-care-app';
 
-// --- ДЖЕРЕЛО ДАНИХ ТОВАРІВ (Локальний JSON) ---
-const PRODUCT_DATA_URL = "./hillary_products_converted.json";
-
-const FALLBACK_PRODUCTS = [
-  { id: "101", name: "Очищувальна пінка для вмивання", description: "М'яко очищує шкіру, не пересушуючи її. Підходить для всіх типів.", link: "https://hillary.ua", price: "249" },
-  { id: "102", name: "Гіалуронова сироватка Smart", description: "Інтенсивно зволожує та розгладжує дрібні зморшки.", link: "https://hillary.ua", price: "389" },
-  { id: "103", name: "Крем з вітаміном С", description: "Вирівнює тон шкіри та надає природного сяйва.", link: "https://hillary.ua", price: "450" }
-];
-
 export default function App() {
   const [user, setUser] = useState(null);
   const [step, setStep] = useState('welcome');
@@ -42,22 +53,25 @@ export default function App() {
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [loadingStatus, setLoadingStatus] = useState('');
   const [error, setError] = useState(null);
-  const [hillaryProducts, setHillaryProducts] = useState([]);
   const [isProfileSaving, setIsProfileSaving] = useState(false);
+  const [supabaseClient, setSupabaseClient] = useState(null);
   
-  // Ключ залишається порожнім для автоматичної підстановки
-  const apiKey = ""; 
+  const apiKey = ""; // Gemini API Key (handled by env)
 
+  // 1. Завантаження Supabase SDK та ініціалізація
   useEffect(() => {
-    if (window.Telegram && window.Telegram.WebApp) {
-      const tg = window.Telegram.WebApp;
-      tg.ready();
-      tg.expand();
-      if (tg.colorScheme === 'dark') {
-        document.documentElement.classList.add('dark');
-      }
-    }
+    const script = document.createElement('script');
+    script.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
+    script.async = true;
+    script.onload = () => {
+      const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+      setSupabaseClient(client);
+    };
+    document.head.appendChild(script);
+  }, []);
 
+  // 2. Auth & Firebase Init
+  useEffect(() => {
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -71,59 +85,39 @@ export default function App() {
     
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
+      if (window.Telegram?.WebApp) {
+        window.Telegram.WebApp.ready();
+        window.Telegram.WebApp.expand();
+      }
     });
     return () => unsubscribe();
   }, []);
 
+  // 3. User Data & History
   useEffect(() => {
     if (!user) return;
     
-    const fetchProfile = async () => {
-      try {
-        const profileSnap = await getDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'data'));
-        if (profileSnap.exists()) {
-          const data = profileSnap.data();
-          setUserData(prev => ({ ...prev, age: data.age || '', skinType: data.skinType || 'не знаю' }));
-        }
-      } catch (err) {}
-    };
-    fetchProfile();
+    getDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'data'))
+      .then(snap => snap.exists() && setUserData(prev => ({...prev, ...snap.data()})));
 
     const historyRef = collection(db, 'artifacts', appId, 'users', user.uid, 'history');
-    const unsubscribe = onSnapshot(historyRef, (snapshot) => {
-      const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    const unsubHistory = onSnapshot(historyRef, (snap) => {
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setPastAnalyses(items.sort((a, b) => new Date(b.date) - new Date(a.date)));
-    }, (err) => {});
+    }, () => {});
     
-    return () => unsubscribe();
+    return () => unsubHistory();
   }, [user]);
-
-  const fetchProducts = async () => {
-    try {
-      const response = await fetch(PRODUCT_DATA_URL);
-      if (!response.ok) throw new Error("Catalog not found");
-      
-      const data = await response.json();
-      const items = Array.isArray(data) ? data : (data.products || data.offers || []);
-      setHillaryProducts(items);
-      return items;
-    } catch (err) {
-      setHillaryProducts(FALLBACK_PRODUCTS);
-      return FALLBACK_PRODUCTS;
-    }
-  };
 
   const saveProfile = async (manual = false) => {
     if (!user) return;
     if (manual) setIsProfileSaving(true);
     try {
       await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'data'), {
-        age: userData.age,
-        skinType: userData.skinType,
+        ...userData,
         updatedAt: new Date().toISOString()
       });
-    } catch (e) {
-    } finally {
+    } catch (e) {} finally {
       if (manual) setIsProfileSaving(false);
     }
   };
@@ -131,11 +125,6 @@ export default function App() {
   const onPhotoSelected = (e) => {
     const file = e.target.files[0];
     if (file) {
-      if (file.size > 10 * 1024 * 1024) {
-        setError("Файл занадто великий (макс. 10МБ)");
-        return;
-      }
-
       const reader = new FileReader();
       reader.onload = (event) => {
         setImage(URL.createObjectURL(file));
@@ -146,132 +135,128 @@ export default function App() {
       };
       reader.readAsDataURL(file);
     }
-    e.target.value = "";
   };
 
   const runAIAnalysis = async () => {
-    if (!base64Image) {
-      setError("Будь ласка, завантажте фото");
-      setStep('upload');
-      return;
-    }
+    if (!base64Image || !user || !supabaseClient) return;
 
     setLoading(true);
     setLoadingProgress(10);
-    setLoadingStatus('Ініціалізація...');
+    setLoadingStatus('Сканування обличчя...');
     setStep('analyzing');
     setError(null);
     
     saveProfile().catch(() => {});
 
     try {
-      setLoadingStatus('Підготовка каталогу...');
-      setLoadingProgress(30);
-      let products = hillaryProducts;
-      if (products.length === 0) {
-        products = await fetchProducts();
-      }
-      
-      setLoadingProgress(50);
-      setLoadingStatus('ШІ аналізує вашу шкіру...');
-
-      const productContext = products.slice(0, 50).map(p => 
-        `ID: ${p.id} | ${p.name} | ${p.description}`
-      ).join('\n---\n');
-
-      // Переносимо системні інструкції безпосередньо в промпт для стабільності
-      const combinedPrompt = `Ти - професійний косметолог Hillary. Проаналізуй фото та анкету користувача. 
-Користувач: вік ${userData.age}, тип шкіри ${userData.skinType}, скарги: ${userData.concerns || 'відсутні'}.
-
-Твоє завдання:
-1. Перевір, чи є на фото обличчя людини.
-2. Детально проаналізуй стан шкіри (пори, текстура, тон).
-3. Підбери 3-4 ID товарів із наданого списку нижче.
-
-Поверни відповідь СУВОРО в форматі JSON без зайвого тексту:
+      const systemPrompt = `Ти - професійний косметолог Hillary. Проаналізуй фото та анкету. 
+Ти повинен визначити тип шкіри, її стан та сформувати 3 короткі пошукові запити (назви продуктів), які допоможуть користувачу.
+Відповідь СУВОРО JSON:
 {
   "is_human_face": true,
-  "skin_condition": "детальний опис",
+  "skin_condition": "детальний аналіз стану",
   "advice": "головна порада",
-  "suggested_ids": ["id1", "id2", "id3"],
-  "skin_type": "визначений тип шкіри"
-}
+  "search_keywords": ["назва_товару_1", "назва_товару_2", "назва_товару_3"],
+  "skin_type": "визначений тип"
+}`;
 
-СПИСОК ТОВАРІВ:
-${productContext}`;
+      const userMsg = `Вік: ${userData.age}, Тип: ${userData.skinType}, Скарги: ${userData.concerns || 'відсутні'}.`;
 
-      const callAIWithRetry = async (retries = 0) => {
-        const delays = [1000, 2000, 4000, 8000, 16000];
+      // Gemini AI Call with retry logic
+      const callAI = async (retries = 0) => {
+        const delays = [1000, 2000, 4000];
         try {
-          const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-          const response = await fetch(url, {
+          const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               contents: [{
                 role: "user",
                 parts: [
-                  { text: combinedPrompt },
+                  { text: userMsg },
                   { inlineData: { mimeType: imageMimeType, data: base64Image } }
                 ]
-              }]
+              }],
+              systemInstruction: { parts: [{ text: systemPrompt }] },
+              generationConfig: { responseMimeType: "application/json" }
             })
           });
-
-          if (!response.ok) {
-            if (retries < 5) {
-              await new Promise(r => setTimeout(r, delays[retries]));
-              return callAIWithRetry(retries + 1);
-            }
-            throw new Error(`API ${response.status}`);
-          }
-          return await response.json();
-        } catch (err) {
-          if (retries < 5) {
+          if (!res.ok && retries < 3) {
             await new Promise(r => setTimeout(r, delays[retries]));
-            return callAIWithRetry(retries + 1);
+            return callAI(retries + 1);
           }
+          return await res.json();
+        } catch (err) {
+          if (retries < 3) return callAI(retries + 1);
           throw err;
         }
       };
 
-      const result = await callAIWithRetry();
-      const aiText = result.candidates?.[0]?.content?.parts?.[0]?.text;
-      
-      if (!aiText) throw new Error("Порожня відповідь ШІ");
-
-      const jsonMatch = aiText.match(/\{[\s\S]*\}/);
-      const parsedResult = JSON.parse(jsonMatch ? jsonMatch[0] : aiText);
+      const aiResponse = await callAI();
+      const aiText = aiResponse.candidates?.[0]?.content?.parts?.[0]?.text;
+      const parsedResult = JSON.parse(aiText);
       
       if (!parsedResult.is_human_face) {
-        setError("Ми не змогли чітко побачити обличчя. Спробуйте зробити селфі при кращому освітленні.");
+        setError("Обличчя не розпізнано. Спробуйте інше фото.");
         setStep('upload');
         setLoading(false);
         return;
       }
 
-      setLoadingProgress(90);
-      setLoadingStatus('Складання рекомендацій...');
+      setLoadingProgress(60);
+      setLoadingStatus('Пошук у базі Supabase...');
+
+      // SEARCH IN SUPABASE
+      // Шукаємо товари для бренду Hillary за ключовими словами
+      const allResults = [];
+      for (const kw of parsedResult.search_keywords) {
+        const { data, error: sbError } = await supabaseClient
+          .from('products')
+          .select('id, name, name_uk, description, price, currency, image_url, product_url')
+          .eq('brand', 'hillary')
+          .ilike('name_uk', `%${kw}%`)
+          .limit(1);
+        
+        if (data && data[0]) allResults.push(data[0]);
+      }
+
+      // Якщо результатів мало, робимо загальний пошук бестселерів
+      if (allResults.length === 0) {
+        const { data } = await supabaseClient
+          .from('products')
+          .select('*')
+          .eq('brand', 'hillary')
+          .eq('is_bestseller', true)
+          .limit(3);
+        if (data) allResults.push(...data);
+      }
+
+      const finalRecommendations = allResults.map(p => ({
+        id: p.id,
+        name: p.name_uk || p.name,
+        description: p.description?.substring(0, 150) + "...",
+        price: p.price,
+        link: p.product_url || `https://hillary.ua/search/?search=${p.name}`,
+        image: p.image_url
+      }));
 
       setAnalysis(parsedResult);
-      const matchedItems = products.filter(p => parsedResult.suggested_ids.includes(p.id));
-      setRecommendations(matchedItems.length > 0 ? matchedItems : products.slice(0, 3));
+      setRecommendations(finalRecommendations);
       
-      if (user) {
-        const historyRef = collection(db, 'artifacts', appId, 'users', user.uid, 'history');
-        await addDoc(historyRef, {
-          date: new Date().toISOString(),
-          analysis: parsedResult,
-          recommendationIds: parsedResult.suggested_ids,
-          userPhoto: image
-        });
-      }
+      // Save History to Firebase
+      await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'history'), {
+        date: new Date().toISOString(),
+        analysis: parsedResult,
+        recommendations: finalRecommendations,
+        userPhoto: image
+      });
       
       setLoadingProgress(100);
-      setTimeout(() => setStep('results'), 300);
+      setTimeout(() => setStep('results'), 500);
 
     } catch (err) {
-      setError(`Збій аналізу. Можливо, сервіс перевантажений, спробуйте ще раз.`);
+      console.error(err);
+      setError("Помилка з'єднання з базою даних. Спробуйте ще раз.");
       setStep('questions');
     } finally {
       setLoading(false);
@@ -279,15 +264,15 @@ ${productContext}`;
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-100 max-w-md mx-auto shadow-2xl flex flex-col overflow-hidden relative pb-20 transition-colors duration-300">
-      <header className="sticky top-0 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md z-50 px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between shrink-0">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-100 max-w-md mx-auto shadow-2xl flex flex-col overflow-hidden relative pb-20">
+      <header className="sticky top-0 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md z-50 px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
         <div className="flex items-center gap-2 cursor-pointer" onClick={() => setStep('welcome')}>
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center -rotate-2 shadow-md">
             <span className="text-white font-black text-sm">H</span>
           </div>
-          <span className="font-bold text-lg tracking-tight uppercase text-blue-600 dark:text-blue-400">HiLLARY AI</span>
+          <span className="font-bold text-lg uppercase text-blue-600 dark:text-blue-400">HiLLARY AI</span>
         </div>
-        <button onClick={() => setStep('history')} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all active:scale-90">
+        <button onClick={() => setStep('history')} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl">
           <History className="w-5 h-5 text-slate-400" />
         </button>
       </header>
@@ -298,176 +283,143 @@ ${productContext}`;
             <div className="w-24 h-24 bg-blue-50 dark:bg-blue-900/20 rounded-[2.5rem] flex items-center justify-center mb-8 shadow-inner">
               <Sparkles className="w-12 h-12 text-blue-500" />
             </div>
-            <h1 className="text-3xl font-black mb-4 tracking-tight leading-tight uppercase text-slate-800 dark:text-white">Hillary AI<br/>Expert</h1>
-            <p className="text-slate-500 dark:text-slate-400 mb-12 leading-relaxed text-sm font-medium px-4">Отримайте індивідуальну програму догляду від ШІ на основі аналізу вашої шкіри.</p>
-            <button onClick={() => setStep('upload')} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-[2rem] font-bold text-lg shadow-xl shadow-blue-100 dark:shadow-none active:scale-95 transition-all uppercase tracking-wider">Почати аналіз</button>
+            <h1 className="text-3xl font-black mb-4 tracking-tight uppercase leading-tight text-slate-800 dark:text-white">Smart Skin<br/>Analysis</h1>
+            <p className="text-slate-500 dark:text-slate-400 mb-12 leading-relaxed text-sm font-medium px-4">Персональний підбір догляду HiLLARY на основі ШІ та реальної бази товарів.</p>
+            <button onClick={() => setStep('upload')} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-[2rem] font-bold text-lg shadow-xl shadow-blue-100 dark:shadow-none active:scale-95 transition-all uppercase tracking-wider">Почати</button>
           </div>
         )}
 
         {step === 'upload' && (
           <div className="p-6 animate-in slide-in-from-right-4">
             <button onClick={() => setStep('welcome')} className="mb-6 flex items-center gap-2 text-slate-400 text-[10px] font-black uppercase tracking-widest"><ArrowLeft className="w-4 h-4"/> Назад</button>
-            <h2 className="text-2xl font-black mb-2 uppercase tracking-tight">Крок 1: Фото</h2>
-            <p className="text-slate-500 dark:text-slate-400 mb-8 text-sm font-medium">Зробіть селфі при денному світлі для максимально точного аналізу.</p>
-            
-            <div className="border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-[3rem] p-16 flex flex-col items-center bg-white dark:bg-slate-900/30 relative hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors cursor-pointer group">
-              <input 
-                type="file" 
-                accept="image/*" 
-                capture="user"
-                onChange={onPhotoSelected} 
-                className="absolute inset-0 opacity-0 cursor-pointer z-10 w-full h-full" 
-              />
-              <div className="w-16 h-16 bg-blue-50 dark:bg-slate-800 rounded-full flex items-center justify-center mb-4 shadow-sm border dark:border-slate-700 group-active:scale-90 transition-transform">
-                <Camera className="text-blue-500 w-8 h-8" />
-              </div>
-              <span className="font-bold text-slate-700 dark:text-slate-300 uppercase text-[10px] tracking-widest text-center">Натисніть,<br/>щоб додати фото</span>
+            <h2 className="text-2xl font-black mb-2 uppercase tracking-tight">Крок 1: Селфі</h2>
+            <p className="text-slate-500 mb-8 text-sm font-medium">Зробіть фото при денному світлі.</p>
+            <div className="border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-[3rem] p-16 flex flex-col items-center bg-white dark:bg-slate-900/30 relative cursor-pointer group">
+              <input type="file" accept="image/*" capture="user" onChange={onPhotoSelected} className="absolute inset-0 opacity-0 z-10 cursor-pointer" />
+              <Camera className="text-blue-500 w-12 h-12 mb-4 group-active:scale-90 transition-transform" />
+              <span className="font-bold text-slate-700 dark:text-slate-300 uppercase text-[10px] tracking-widest text-center">Натисніть для фото</span>
             </div>
-            
-            {error && <div className="mt-6 p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-2xl text-xs font-bold flex gap-2"><AlertCircle className="w-4 h-4 shrink-0"/>{error}</div>}
+            {error && <div className="mt-6 p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-bold flex gap-2 animate-bounce"><AlertCircle className="w-4 h-4 shrink-0"/>{error}</div>}
           </div>
         )}
 
         {step === 'questions' && (
-          <div className="p-6 animate-in slide-in-from-right-4">
-             <button onClick={() => setStep('upload')} className="mb-4 flex items-center gap-2 text-slate-400 text-[10px] font-black uppercase tracking-widest"><ArrowLeft className="w-4 h-4"/> До фото</button>
-            <h2 className="text-2xl font-black mb-6 uppercase tracking-tight">Крок 2: Анкета</h2>
-            <div className="space-y-6">
+          <div className="p-6 space-y-6 animate-in slide-in-from-right-4">
+            <button onClick={() => setStep('upload')} className="mb-2 flex items-center gap-2 text-slate-400 text-[10px] font-black uppercase tracking-widest"><ArrowLeft className="w-4 h-4"/> Назад</button>
+            <h2 className="text-2xl font-black uppercase tracking-tight">Крок 2: Анкета</h2>
+            <div className="space-y-4">
               <div>
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 ml-1 block mb-2">Ваш вік</label>
-                <input type="number" value={userData.age} placeholder="25" className="w-full p-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 focus:border-blue-500 outline-none font-bold text-lg text-slate-900 dark:text-white transition-all" onChange={(e) => setUserData({...userData, age: e.target.value})} />
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2 ml-1">Вік</label>
+                <input type="number" value={userData.age} className="w-full p-4 rounded-2xl border dark:bg-slate-900 focus:border-blue-500 outline-none font-bold text-lg" placeholder="25" onChange={(e) => setUserData({...userData, age: e.target.value})} />
               </div>
               <div>
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 ml-1 block mb-2">Ваш тип шкіри</label>
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2 ml-1">Тип шкіри</label>
                 <div className="grid grid-cols-2 gap-2">
                   {['Суха', 'Жирна', 'Комбінована', 'Не знаю'].map(t => (
-                    <button key={t} onClick={() => setUserData({...userData, skinType: t})} className={`p-4 rounded-2xl border-2 font-bold text-xs transition-all ${userData.skinType === t ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 shadow-sm' : 'border-slate-100 dark:border-slate-800 text-slate-400 dark:text-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800'}`}>{t}</button>
+                    <button key={t} onClick={() => setUserData({...userData, skinType: t})} className={`p-4 rounded-2xl border-2 font-bold text-xs transition-all ${userData.skinType === t ? 'border-blue-600 bg-blue-50 text-blue-600' : 'border-slate-100 dark:border-slate-800'}`}>{t}</button>
                   ))}
                 </div>
               </div>
               <div>
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 ml-1 block mb-2">Що вас турбує?</label>
-                <textarea value={userData.concerns} placeholder="Наприклад: сухість, висипи, зморшки..." className="w-full p-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 focus:border-blue-500 outline-none h-28 resize-none text-sm font-medium leading-relaxed text-slate-900 dark:text-white transition-all" onChange={(e) => setUserData({...userData, concerns: e.target.value})} />
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2 ml-1">Скарги</label>
+                <textarea value={userData.concerns} className="w-full p-4 rounded-2xl border dark:bg-slate-900 focus:border-blue-500 outline-none font-medium text-sm h-32 resize-none" placeholder="Опишіть, що вас турбує..." onChange={(e) => setUserData({...userData, concerns: e.target.value})} />
               </div>
-              <button onClick={runAIAnalysis} disabled={!userData.age || loading} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-[2rem] font-bold shadow-xl active:scale-95 transition-all uppercase tracking-widest disabled:opacity-50">Аналізувати шкіру</button>
+              <button onClick={runAIAnalysis} disabled={!userData.age || loading} className="w-full bg-blue-600 text-white py-5 rounded-[2rem] font-bold shadow-xl active:scale-95 transition-all uppercase tracking-widest disabled:opacity-50">Аналізувати</button>
             </div>
-            {error && <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-2xl text-xs font-bold flex gap-2"><AlertCircle className="w-4 h-4 shrink-0"/>{error}</div>}
           </div>
         )}
 
         {step === 'analyzing' && (
-          <div className="flex flex-col items-center justify-center min-h-[70vh] p-8 text-center animate-in fade-in">
-            <div className="relative mb-12">
-               <div className="w-20 h-20 bg-blue-600/10 rounded-full flex items-center justify-center animate-pulse shadow-inner">
-                  <Loader2 className="w-10 h-10 text-blue-600 animate-spin"/>
-               </div>
-               <Sparkles className="absolute -top-2 -right-2 w-6 h-6 text-yellow-400 animate-bounce" />
+          <div className="flex flex-col items-center justify-center min-h-[60vh] text-center animate-in fade-in">
+            <Loader2 className="w-12 h-12 text-blue-600 animate-spin mb-6"/>
+            <h3 className="text-xl font-bold uppercase mb-2">{loadingStatus}</h3>
+            <div className="w-48 h-1.5 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
+              <div className="h-full bg-blue-600 transition-all duration-700" style={{ width: `${loadingProgress}%` }}></div>
             </div>
-            
-            <h3 className="text-xl font-bold uppercase tracking-tight dark:text-white mb-2">{loadingStatus}</h3>
-            
-            <div className="w-full max-w-[240px] h-2 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden mt-6 shadow-inner">
-              <div className="h-full bg-blue-600 transition-all duration-700 ease-out shadow-[0_0_10px_rgba(37,99,235,0.5)]" style={{ width: `${loadingProgress}%` }}></div>
-            </div>
-            
-            <p className="text-slate-400 dark:text-slate-500 text-xs mt-6 font-medium italic px-4 leading-relaxed">Зачекайте кілька секунд. ШІ Hillary підбирає найкращу програму для вас.</p>
+            <p className="mt-6 text-slate-400 text-xs italic">Аналізуємо базу Hillary через Supabase...</p>
           </div>
         )}
 
         {step === 'results' && analysis && (
-          <div className="pb-12 animate-in fade-in duration-1000">
-            <div className="h-64 relative shadow-inner">
-              <img src={image} className="w-full h-full object-cover" />
-              <div className="absolute inset-0 bg-gradient-to-t from-slate-50 dark:from-slate-950 via-transparent"></div>
-              <button onClick={() => setStep('upload')} className="absolute top-4 right-4 bg-white/80 dark:bg-slate-900/80 p-3 rounded-2xl shadow-lg backdrop-blur-sm active:scale-90 transition-transform"><RefreshCcw className="w-5 h-5 text-slate-700 dark:text-slate-300" /></button>
+          <div className="space-y-8 pb-12 animate-in fade-in duration-1000">
+            <div className="px-6 -mt-4">
+               <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-7 shadow-2xl border border-slate-50 dark:border-slate-800">
+                  <div className="flex items-center gap-2 mb-4">
+                     <CheckCircle2 className="text-green-500 w-5 h-5"/>
+                     <h3 className="font-bold text-lg uppercase italic text-slate-800 dark:text-white">Результат</h3>
+                  </div>
+                  <p className="text-slate-700 dark:text-slate-300 text-sm mb-6 leading-relaxed font-medium">{analysis.skin_condition}</p>
+                  <div className="bg-blue-50 dark:bg-blue-900/20 p-5 rounded-3xl border-l-4 border-blue-600">
+                     <p className="text-blue-900 dark:text-blue-200 text-sm italic font-bold leading-relaxed">"{analysis.advice}"</p>
+                  </div>
+               </div>
             </div>
-            <div className="px-6 -mt-12 relative z-10">
-              <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-7 shadow-2xl border border-slate-50 dark:border-slate-800 mb-8 transition-transform hover:scale-[1.01]">
-                <div className="flex items-center gap-2 mb-4">
-                   <div className="p-2 bg-green-50 dark:bg-green-900/20 rounded-lg">
-                      <CheckCircle2 className="text-green-500 w-5 h-5"/>
-                   </div>
-                   <h3 className="font-bold text-lg uppercase tracking-tight italic text-slate-800 dark:text-white">Результат</h3>
-                </div>
-                <p className="text-slate-700 dark:text-slate-300 text-sm mb-6 leading-relaxed font-medium">{analysis.skin_condition}</p>
-                <div className="bg-blue-50 dark:bg-blue-900/20 p-5 rounded-3xl flex items-start gap-3 border-l-4 border-blue-600 shadow-sm">
-                  <Lightbulb className="w-5 h-5 text-blue-600 dark:text-blue-400 mt-1 shrink-0" />
-                  <p className="text-blue-900 dark:text-blue-200 text-sm italic font-bold leading-relaxed">"{analysis.advice}"</p>
-                </div>
-              </div>
 
-              <h3 className="text-xl font-black text-slate-800 dark:text-white mb-6 px-2 uppercase tracking-tight">Програма догляду:</h3>
+            <div className="px-6 space-y-6">
+              <h3 className="text-xl font-black uppercase tracking-tight px-2 flex items-center gap-2">
+                 <ShoppingBag className="w-5 h-5 text-blue-600" /> Підібрані засоби
+              </h3>
               <div className="space-y-4">
                 {recommendations.map(item => (
                   <div key={item.id} className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-5 rounded-[2.5rem] shadow-sm hover:shadow-lg transition-all group">
-                    <div className="flex items-start justify-between mb-3">
-                      <span className="text-[9px] font-black text-slate-300 dark:text-slate-600 uppercase tracking-widest">Арт: {item.id}</span>
-                      <a href={item.link} target="_blank" rel="noopener noreferrer" className="text-blue-500 p-2 bg-blue-50 dark:bg-blue-900/30 rounded-xl hover:bg-blue-600 hover:text-white transition-all"><ExternalLink className="w-4 h-4" /></a>
+                    <div className="flex items-center gap-4 mb-4">
+                       {item.image && <img src={item.image} className="w-16 h-16 rounded-xl object-cover border" alt={item.name} />}
+                       <div className="flex-1 min-w-0">
+                          <h4 className="font-black text-slate-800 dark:text-white leading-tight group-hover:text-blue-600 transition-colors text-sm line-clamp-2">{item.name}</h4>
+                          <span className="text-[10px] font-bold text-slate-400">Код: {item.id}</span>
+                       </div>
                     </div>
-                    <h4 className="font-black text-slate-800 dark:text-white text-md leading-tight mb-2 group-hover:text-blue-600 transition-colors">{item.name}</h4>
-                    <p className="text-slate-500 dark:text-slate-400 text-xs leading-relaxed mb-4 font-medium line-clamp-3">{item.description}</p>
                     <div className="flex justify-between items-center border-t border-slate-50 dark:border-slate-800 pt-4">
                        <span className="font-black text-blue-600 dark:text-blue-400 text-xl">{item.price} грн</span>
-                       <a href={item.link} target="_blank" rel="noopener noreferrer" className="bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-black uppercase tracking-widest px-7 py-4 rounded-2xl transition-all shadow-lg active:scale-95">Придбати</a>
+                       <a href={item.link} target="_blank" rel="noopener noreferrer" className="bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-black uppercase px-6 py-3 rounded-2xl shadow-lg active:scale-95 transition-all">Придбати</a>
                     </div>
                   </div>
                 ))}
               </div>
-              <button onClick={() => setStep('welcome')} className="w-full mt-12 py-5 text-slate-300 dark:text-slate-700 font-black uppercase tracking-[0.3em] text-[10px] hover:text-blue-600 transition-colors">Новий аналіз</button>
+              <button onClick={() => setStep('welcome')} className="w-full py-5 text-slate-300 font-black uppercase tracking-widest text-[10px] hover:text-blue-600 transition-colors">Новий аналіз</button>
             </div>
           </div>
         )}
 
         {step === 'history' && (
-          <div className="p-6 animate-in slide-in-from-left-4">
-            <button onClick={() => setStep('welcome')} className="mb-6 flex items-center gap-2 text-slate-400 text-[10px] font-black uppercase tracking-widest hover:text-blue-600 transition-colors"><ArrowLeft className="w-4 h-4"/> Назад</button>
-            <h2 className="text-2xl font-black mb-8 text-slate-800 dark:text-white uppercase tracking-tight">Ваша історія</h2>
-            <div className="space-y-4 pb-12">
-              {pastAnalyses.length === 0 ? (
-                <div className="text-center py-24 text-slate-300 dark:text-slate-800 font-bold italic text-xs uppercase tracking-widest leading-loose">Історія порожня</div>
-              ) : (
-                pastAnalyses.map(item => (
-                  <div key={item.id} className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-4 rounded-[2rem] shadow-sm flex items-center gap-4 transition-all hover:border-blue-200 dark:hover:border-blue-900 active:scale-[0.98] cursor-pointer" onClick={() => { 
-                        setAnalysis(item.analysis); 
-                        setImage(item.userPhoto); 
-                        const matched = hillaryProducts.filter(p => item.recommendationIds.includes(p.id));
-                        setRecommendations(matched.length > 0 ? matched : hillaryProducts.slice(0, 3)); 
-                        setStep('results'); 
-                      }}>
-                    <div className="w-14 h-14 rounded-2xl overflow-hidden shadow-sm border-2 border-white dark:border-slate-800">
-                      <img src={item.userPhoto} className="w-full h-full object-cover" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[10px] text-slate-400 dark:text-slate-500 font-black uppercase">{new Date(item.date).toLocaleDateString()}</p>
-                      <h4 className="font-bold text-slate-800 dark:text-slate-200 text-sm truncate uppercase tracking-tighter">{item.analysis?.skin_type || 'Аналіз'}</h4>
-                    </div>
-                    <ChevronRight className="w-5 h-5 text-slate-300 dark:text-slate-700" />
+          <div className="p-6 space-y-4 pb-12 animate-in slide-in-from-left-4">
+            <button onClick={() => setStep('welcome')} className="mb-6 flex items-center gap-2 text-slate-400 text-[10px] font-black uppercase tracking-widest"><ArrowLeft className="w-4 h-4"/> Назад</button>
+            <h2 className="text-2xl font-black mb-8 uppercase tracking-tight">Історія</h2>
+            {pastAnalyses.length === 0 ? (
+              <div className="text-center py-24 text-slate-300 font-bold italic text-xs uppercase tracking-widest">Поки порожньо</div>
+            ) : (
+              pastAnalyses.map(item => (
+                <div key={item.id} className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-4 rounded-[2rem] shadow-sm flex items-center gap-4 active:scale-[0.98] cursor-pointer" onClick={() => { 
+                      setAnalysis(item.analysis); 
+                      setImage(item.userPhoto); 
+                      setRecommendations(item.recommendations || []); 
+                      setStep('results'); 
+                    }}>
+                  <div className="w-14 h-14 rounded-2xl overflow-hidden border-2 border-white dark:border-slate-800 shadow-sm">
+                    <img src={item.userPhoto} className="w-full h-full object-cover" />
                   </div>
-                ))
-              )}
-            </div>
+                  <div className="flex-1 min-w-0 text-left">
+                    <p className="text-[10px] text-slate-400 font-black uppercase">{new Date(item.date).toLocaleDateString()}</p>
+                    <h4 className="font-bold text-slate-800 dark:text-slate-200 text-sm truncate uppercase tracking-tighter">{item.analysis?.skin_type || 'Аналіз'}</h4>
+                  </div>
+                  <ChevronRight className="w-5 h-5 text-slate-300" />
+                </div>
+              ))
+            )}
           </div>
         )}
 
         {step === 'profile' && (
           <div className="p-6 space-y-8 animate-in slide-in-from-right-4">
-            <h2 className="text-2xl font-black mb-8 uppercase tracking-tight text-slate-800 dark:text-white">Мій Профіль</h2>
-            <div className="space-y-6">
+            <h2 className="text-2xl font-black uppercase tracking-tight">Ваш Профіль</h2>
+            <div className="space-y-6 text-left">
               <div>
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 ml-1 block mb-2">Ваш вік</label>
-                <input type="number" value={userData.age} placeholder="25" className="w-full p-5 rounded-3xl border border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 focus:border-blue-500 outline-none font-bold text-lg text-slate-900 dark:text-white shadow-inner transition-all" onChange={(e) => setUserData({...userData, age: e.target.value})} />
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2 ml-1">Ваш вік</label>
+                <input type="number" value={userData.age} className="w-full p-5 rounded-3xl border border-slate-100 dark:border-slate-800 dark:bg-slate-900 focus:border-blue-500 outline-none font-bold text-lg shadow-inner" onChange={(e) => setUserData({...userData, age: e.target.value})} />
               </div>
-              <div>
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 ml-1 block mb-2">Ваш тип шкіри</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {['Суха', 'Жирна', 'Комбінована', 'Не знаю'].map(t => (
-                    <button key={t} onClick={() => setUserData({...userData, skinType: t})} className={`p-4 rounded-2xl border-2 font-bold text-xs transition-all ${userData.skinType === t ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 shadow-sm' : 'border-slate-100 dark:border-slate-800 text-slate-400 dark:text-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800'}`}>{t}</button>
-                  ))}
-                </div>
-              </div>
-              <button onClick={() => saveProfile(true)} disabled={isProfileSaving} className="w-full bg-slate-900 dark:bg-blue-600 text-white py-5 rounded-[2rem] font-bold shadow-lg flex items-center justify-center gap-3 active:scale-95 transition-all uppercase tracking-widest">
+              <button onClick={() => saveProfile(true)} disabled={isProfileSaving} className="w-full bg-blue-600 text-white py-5 rounded-[2rem] font-bold shadow-lg flex items-center justify-center gap-3 active:scale-95 transition-all uppercase tracking-widest">
                 {isProfileSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
-                {isProfileSaving ? "Зберігаємо..." : "Зберегти налаштування"}
+                Зберегти дані
               </button>
             </div>
           </div>
@@ -476,13 +428,13 @@ ${productContext}`;
 
       <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/95 dark:bg-slate-950/95 backdrop-blur-md border-t border-slate-100 dark:border-slate-800 h-20 px-8 flex items-center justify-between z-50">
         <button onClick={() => setStep('welcome')} className={`flex flex-col items-center gap-1 transition-all ${['welcome', 'upload', 'questions', 'analyzing', 'results'].includes(step) ? 'text-blue-600 dark:text-blue-400 scale-110' : 'text-slate-300 dark:text-slate-700'}`}>
-          <Home className="w-6 h-6" /><span className="text-[9px] font-black uppercase tracking-tighter">Дім</span>
+          <Home className="w-6 h-6" /><span className="text-[8px] font-black uppercase tracking-tighter">Дім</span>
         </button>
         <button onClick={() => setStep('history')} className={`flex flex-col items-center gap-1 transition-all ${step === 'history' ? 'text-blue-600 dark:text-blue-400 scale-110' : 'text-slate-300 dark:text-slate-700'}`}>
-          <History className="w-6 h-6" /><span className="text-[9px] font-black uppercase tracking-tighter">Історія</span>
+          <History className="w-6 h-6" /><span className="text-[8px] font-black uppercase tracking-tighter">Історія</span>
         </button>
         <button onClick={() => setStep('profile')} className={`flex flex-col items-center gap-1 transition-all ${step === 'profile' ? 'text-blue-600 dark:text-blue-400 scale-110' : 'text-slate-300 dark:text-slate-700'}`}>
-          <User className="w-6 h-6" /><span className="text-[9px] font-black uppercase tracking-tighter">Профіль</span>
+          <User className="w-6 h-6" /><span className="text-[8px] font-black uppercase tracking-tighter">Профіль</span>
         </button>
       </nav>
     </div>
