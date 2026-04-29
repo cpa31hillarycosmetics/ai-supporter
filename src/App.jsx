@@ -57,9 +57,9 @@ export default function App() {
   const [isProfileSaving, setIsProfileSaving] = useState(false);
   const [supabaseClient, setSupabaseClient] = useState(null);
   
-  const apiKey = ""; // Gemini API Key (handled by environment)
+  const apiKey = ""; // Ключ Gemini надається середовищем
 
-  // 1. Ініціалізація Supabase через скрипт
+  // 1. Ініціалізація Supabase (CDN)
   useEffect(() => {
     const script = document.createElement('script');
     script.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
@@ -73,7 +73,7 @@ export default function App() {
     document.head.appendChild(script);
   }, []);
 
-  // 2. Auth & Firebase Init
+  // 2. Auth & Firebase (RULE 3)
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -82,7 +82,9 @@ export default function App() {
         } else {
           await signInAnonymously(auth);
         }
-      } catch (e) { console.error("Firebase Auth Error", e); }
+      } catch (e) {
+        console.error("Auth init failed", e);
+      }
     };
     initAuth();
     
@@ -96,7 +98,7 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 3. User Data & History
+  // 3. Sync User Data & History
   useEffect(() => {
     if (!user) return;
     
@@ -107,7 +109,7 @@ export default function App() {
     const unsubHistory = onSnapshot(historyRef, (snap) => {
       const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setPastAnalyses(items.sort((a, b) => new Date(b.date) - new Date(a.date)));
-    }, (err) => console.error("Firestore History Error", err));
+    }, (err) => setError("Не вдалося завантажити історію. Перевірте з'єднання."));
     
     return () => unsubHistory();
   }, [user]);
@@ -120,13 +122,20 @@ export default function App() {
         ...userData,
         updatedAt: new Date().toISOString()
       });
-    } catch (e) { console.error("Profile Save Error", e); }
-    finally { if (manual) setIsProfileSaving(false); }
+    } catch (e) {
+      console.error("Profile save failed", e);
+    } finally {
+      if (manual) setIsProfileSaving(false);
+    }
   };
 
   const onPhotoSelected = (e) => {
     const file = e.target.files[0];
     if (file) {
+      if (file.size > 10 * 1024 * 1024) {
+        setError("Файл занадто великий (макс. 10МБ)");
+        return;
+      }
       const reader = new FileReader();
       reader.onload = (event) => {
         setImage(URL.createObjectURL(file));
@@ -140,43 +149,35 @@ export default function App() {
   };
 
   const runAIAnalysis = async () => {
-    if (!base64Image) {
-        setError("Будь ласка, завантажте фото.");
-        return;
-    }
-    if (!supabaseClient) {
-        setError("База даних товарів ще завантажується. Зачекайте 2-3 секунди.");
-        return;
-    }
-    if (!user) {
-        setError("Авторизація... Зачекайте секунду.");
-        return;
-    }
+    if (!base64Image) { setError("Будь ласка, зробіть фото."); return; }
+    if (!supabaseClient) { setError("База даних ще ініціалізується. Почекайте секунду."); return; }
+    if (!user) { setError("Авторизація... Спробуйте ще раз за мить."); return; }
 
     setLoading(true);
-    setLoadingProgress(10);
-    setLoadingStatus('Сканування шкіри ШІ...');
-    setStep('analyzing');
     setError(null);
+    setLoadingProgress(15);
+    setLoadingStatus('ШІ вивчає стан шкіри...');
+    setStep('analyzing');
     
     saveProfile().catch(() => {});
 
     try {
-      const systemPrompt = `Ти - професійний косметичний експерт Hillary. Проаналізуй фото та анкету. 
-Тобі потрібно визначити стан шкіри та сформувати 3-4 назви товарів Hillary (українською), які найкраще підійдуть.
-Відповідь ПОВИННА бути СУВОРО JSON:
+      const systemPrompt = `Ти - професійний ШІ-косметолог бренду HiLLARY. 
+Аналізуй селфі та анкету. Тобі потрібно визначити тип шкіри, її стан та підібрати 3 найкращі товари Hillary.
+Відповідь СУВОРО JSON без зайвих слів:
 {
   "is_human_face": true,
-  "skin_condition": "аналіз стану шкіри",
-  "advice": "головна порада",
-  "search_keywords": ["назва продукту 1", "назва продукту 2", "назва продукту 3"],
+  "skin_condition": "детальний аналіз",
+  "advice": "порада косметолога",
+  "search_keywords": ["назва_товару_1", "назва_товару_2", "назва_товару_3"],
   "skin_type": "тип шкіри"
 }`;
 
-      const userMsg = `Вік: ${userData.age}, Тип: ${userData.skinType}, Скарги: ${userData.concerns || 'відсутні'}.`;
+      const userMessage = `Вік: ${userData.age}, Тип: ${userData.skinType}, Скарги: ${userData.concerns || 'відсутні'}.`;
 
+      // AI Call (Gemini 2.5 Flash)
       const callAI = async (retries = 0) => {
-        const delays = [1000, 2000, 4000];
+        const delays = [1000, 2000, 4000, 8000, 16000];
         try {
           const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
             method: 'POST',
@@ -185,7 +186,7 @@ export default function App() {
               contents: [{
                 role: "user",
                 parts: [
-                  { text: userMsg },
+                  { text: userMessage },
                   { inlineData: { mimeType: imageMimeType, data: base64Image } }
                 ]
               }],
@@ -195,61 +196,69 @@ export default function App() {
           });
 
           if (!res.ok) {
-            if (retries < 3) {
+            if (retries < 4) {
               await new Promise(r => setTimeout(r, delays[retries]));
               return callAI(retries + 1);
             }
-            throw new Error(`AI API Error ${res.status}`);
+            throw new Error(`AI Error ${res.status}`);
           }
           return await res.json();
         } catch (err) {
-          if (retries < 3) return callAI(retries + 1);
+          if (retries < 4) {
+            await new Promise(r => setTimeout(r, delays[retries]));
+            return callAI(retries + 1);
+          }
           throw err;
         }
       };
 
-      const aiResponse = await callAI();
-      const aiText = aiResponse.candidates?.[0]?.content?.parts?.[0]?.text;
-      const parsedResult = JSON.parse(aiText);
+      const result = await callAI();
+      const aiText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!aiText) throw new Error("ШІ не повернув результат.");
+
+      const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+      const parsedResult = JSON.parse(jsonMatch ? jsonMatch[0] : aiText);
       
       if (!parsedResult.is_human_face) {
-        setError("Обличчя не знайдено на фото. Спробуйте інше селфі.");
+        setError("Ми не впізнали обличчя на фото. Спробуйте інше селфі.");
         setStep('upload');
         setLoading(false);
         return;
       }
 
       setLoadingProgress(60);
-      setLoadingStatus('Пошук у базі Supabase...');
+      setLoadingStatus('Шукаємо засоби у базі Hillary...');
 
-      // Пошук у Supabase за ключовими словами від AI
-      const allResults = [];
-      for (const kw of parsedResult.search_keywords) {
-        const { data, error: sbError } = await supabaseClient
-          .from('products')
-          .select('id, name, name_uk, description, price, currency, image_url, product_url')
-          .eq('brand', 'hillary')
-          .ilike('name_uk', `%${kw}%`)
-          .limit(1);
-        
-        if (data && data[0]) allResults.push(data[0]);
-      }
+      // PARALLEL SEARCH IN SUPABASE (Optimized)
+      const searchPromises = parsedResult.search_keywords.map(async (kw) => {
+        try {
+          const { data } = await supabaseClient
+            .from('products')
+            .select('id, name, name_uk, description, price, currency, image_url, product_url')
+            .eq('brand', 'hillary')
+            .ilike('name_uk', `%${kw}%`)
+            .limit(1);
+          return data && data[0] ? data[0] : null;
+        } catch (e) { return null; }
+      });
 
-      // Якщо AI не знайшов специфічних, беремо бестселери
-      if (allResults.length === 0) {
+      const foundItems = (await Promise.all(searchPromises)).filter(it => it !== null);
+
+      // Fallback to bestsellers if nothing specific found
+      if (foundItems.length === 0) {
         const { data } = await supabaseClient
           .from('products')
           .select('*')
           .eq('brand', 'hillary')
           .eq('is_bestseller', true)
           .limit(3);
-        if (data) allResults.push(...data);
+        if (data) foundItems.push(...data);
       }
 
-      const finalRecommendations = allResults.map(p => ({
+      const finalRecommendations = foundItems.map(p => ({
         id: p.id,
         name: p.name_uk || p.name,
-        description: p.description?.substring(0, 120) + "...",
+        description: p.description?.replace(/<\/?[^>]+(>|$)/g, "").substring(0, 150) + "...",
         price: p.price,
         link: p.product_url || `https://hillary.ua/search/?search=${encodeURIComponent(p.name_uk || p.name)}`,
         image: p.image_url
@@ -258,8 +267,9 @@ export default function App() {
       setAnalysis(parsedResult);
       setRecommendations(finalRecommendations);
       
-      // Збереження в історію Firestore
-      await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'history'), {
+      // Save to Firebase History (RULE 1)
+      const historyRef = collection(db, 'artifacts', appId, 'users', user.uid, 'history');
+      await addDoc(historyRef, {
         date: new Date().toISOString(),
         analysis: parsedResult,
         recommendations: finalRecommendations,
@@ -267,11 +277,11 @@ export default function App() {
       });
       
       setLoadingProgress(100);
-      setTimeout(() => setStep('results'), 500);
+      setTimeout(() => setStep('results'), 300);
 
     } catch (err) {
       console.error("Analysis Error:", err);
-      setError("Збій аналізу. Перевірте інтернет та спробуйте ще раз.");
+      setError("Збій аналізу. Можливо, мережа нестабільна. Спробуйте ще раз.");
       setStep('questions');
     } finally {
       setLoading(false);
@@ -281,15 +291,15 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-100 max-w-md mx-auto shadow-2xl flex flex-col overflow-hidden relative pb-20">
       
-      <header className="sticky top-0 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md z-50 px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+      <header className="sticky top-0 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md z-50 px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2 cursor-pointer" onClick={() => setStep('welcome')}>
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center -rotate-2 shadow-md">
             <span className="text-white font-black text-sm">H</span>
           </div>
           <span className="font-bold text-lg uppercase text-blue-600 dark:text-blue-400 tracking-tight">HiLLARY AI</span>
         </div>
-        <div className="flex items-center gap-2">
-            <div title={supabaseClient ? "База підключена" : "База завантажується"} className={`w-2 h-2 rounded-full ${supabaseClient ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-yellow-500 animate-pulse'}`}></div>
+        <div className="flex items-center gap-3">
+            <div title={supabaseClient ? "База активна" : "Підключення..."} className={`w-2.5 h-2.5 rounded-full ${supabaseClient ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.4)]' : 'bg-yellow-500 animate-pulse'}`}></div>
             <button onClick={() => setStep('history')} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all">
                 <History className="w-5 h-5 text-slate-400" />
             </button>
@@ -302,9 +312,9 @@ export default function App() {
             <div className="w-24 h-24 bg-blue-50 dark:bg-blue-900/20 rounded-[2.5rem] flex items-center justify-center mb-8 shadow-inner border border-blue-100 dark:border-blue-800">
               <Sparkles className="w-12 h-12 text-blue-500" />
             </div>
-            <h1 className="text-3xl font-black mb-4 tracking-tight uppercase leading-tight text-slate-800 dark:text-white">Smart Skin<br/>Advisor</h1>
+            <h1 className="text-3xl font-black mb-4 tracking-tight uppercase leading-tight text-slate-800 dark:text-white">Smart Skin<br/>Analysis</h1>
             <p className="text-slate-500 dark:text-slate-400 mb-12 leading-relaxed text-sm font-medium px-4">
-                Індивідуальна програма догляду Hillary, створена ШІ на основі аналізу вашої шкіри.
+                Отримайте персональну програму догляду HiLLARY на основі ШІ аналізу вашої шкіри.
             </p>
             <button onClick={() => setStep('upload')} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-[2rem] font-bold text-lg shadow-xl shadow-blue-100 dark:shadow-none active:scale-95 transition-all uppercase tracking-wider">Почати розбір</button>
           </div>
@@ -313,8 +323,8 @@ export default function App() {
         {step === 'upload' && (
           <div className="p-6 animate-in slide-in-from-right-4">
             <button onClick={() => setStep('welcome')} className="mb-6 flex items-center gap-2 text-slate-400 text-[10px] font-black uppercase tracking-widest"><ArrowLeft className="w-4 h-4"/> Назад</button>
-            <h2 className="text-2xl font-black mb-2 uppercase tracking-tight">Крок 1: Селфі</h2>
-            <p className="text-slate-500 mb-8 text-sm font-medium">Зробіть фото без макіяжу при денному світлі.</p>
+            <h2 className="text-2xl font-black mb-2 uppercase tracking-tight">Крок 1: Фото</h2>
+            <p className="text-slate-500 mb-8 text-sm font-medium">Зробіть селфі без макіяжу при денному світлі.</p>
             <div className="border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-[3rem] p-16 flex flex-col items-center bg-white dark:bg-slate-900/30 relative cursor-pointer group hover:border-blue-400 transition-colors">
               <input type="file" accept="image/*" capture="user" onChange={onPhotoSelected} className="absolute inset-0 opacity-0 z-10 cursor-pointer" />
               <Camera className="text-blue-500 w-12 h-12 mb-4 group-active:scale-90 transition-transform" />
@@ -342,8 +352,8 @@ export default function App() {
                 </div>
               </div>
               <div>
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2 ml-1">Ваші скарги</label>
-                <textarea value={userData.concerns} className="w-full p-4 rounded-2xl border dark:border-slate-800 dark:bg-slate-950 focus:border-blue-500 outline-none font-medium text-sm h-32 resize-none" placeholder="Опишіть, що вас турбує (сухість, акне, зморшки...)" onChange={(e) => setUserData({...userData, concerns: e.target.value})} />
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2 ml-1">Що вас турбує?</label>
+                <textarea value={userData.concerns} className="w-full p-4 rounded-2xl border dark:border-slate-800 dark:bg-slate-950 focus:border-blue-500 outline-none font-medium text-sm h-32 resize-none" placeholder="Опишіть скарги (сухість, висипи, зморшки...)" onChange={(e) => setUserData({...userData, concerns: e.target.value})} />
               </div>
               
               {error && <div className="p-3 bg-red-50 text-red-600 rounded-xl text-xs font-bold flex gap-2"><AlertCircle className="w-4 h-4 shrink-0"/>{error}</div>}
@@ -353,8 +363,7 @@ export default function App() {
                 disabled={!userData.age || loading} 
                 className="w-full bg-blue-600 text-white py-5 rounded-[2rem] font-bold shadow-xl active:scale-95 transition-all uppercase tracking-widest disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                {!supabaseClient && <Loader2 className="w-5 h-5 animate-spin" />}
-                {loading ? "Аналіз..." : !supabaseClient ? "Підключення бази..." : "Аналізувати"}
+                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Аналізувати"}
               </button>
             </div>
           </div>
@@ -370,7 +379,7 @@ export default function App() {
             <div className="w-48 h-1.5 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden shadow-inner">
               <div className="h-full bg-blue-600 transition-all duration-700" style={{ width: `${loadingProgress}%` }}></div>
             </div>
-            <p className="mt-6 text-slate-400 text-xs italic px-8 leading-relaxed">Наш ШІ аналізує кожну пору вашої шкіри та шукає найкращі засоби у базі Hillary через Supabase...</p>
+            <p className="mt-6 text-slate-400 text-xs italic px-8 leading-relaxed">ШІ вивчає кожну пору шкіри та шукає найкращі засоби у базі Supabase...</p>
           </div>
         )}
 
@@ -415,7 +424,7 @@ export default function App() {
                     </div>
                   </div>
                 )) : (
-                    <div className="text-center py-8 text-slate-400 italic text-sm">Товари підбираються...</div>
+                    <div className="text-center py-8 text-slate-400 italic text-sm">На жаль, точних співпадінь не знайдено.</div>
                 )}
               </div>
               <button onClick={() => setStep('welcome')} className="w-full mt-8 py-5 text-slate-300 font-black uppercase tracking-widest text-[10px] hover:text-blue-600 transition-colors italic">Новий аналіз</button>
@@ -463,7 +472,6 @@ export default function App() {
                 {isProfileSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
                 Зберегти налаштування
               </button>
-              <p className="text-[10px] text-slate-400 text-center px-6 leading-relaxed">Ці дані допоможуть ШІ більш точно підбирати догляд під ваші вікові особливості.</p>
             </div>
           </div>
         )}
